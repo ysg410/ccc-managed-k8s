@@ -2,51 +2,76 @@
 
 # ccc-managed-k8s
 
-Short blurb about what your project does.
+Reference Terraform blueprints for opinionated, secure-by-default managed Kubernetes clusters on Azure (AKS), AWS (EKS), and Google Cloud (GKE).
 
-## Installation
+The blueprints are executable reference implementations for [Common Cloud Controls](https://github.com/finos/common-cloud-controls) (CCC), the FINOS project that defines an industry-standard set of cloud controls. They show how CCC controls for managed Kubernetes map to Terraform that builds real clusters. The goal is to work with cloud providers and the wider industry on a common baseline for secure, production-grade Kubernetes.
 
-OS X & Linux:
+## Who this is for
 
-```sh
-npm install my-crazy-module --save
-```
+- Platform engineering, SRE, and application teams in financial services and other regulated industries who need a consistent, secure Kubernetes baseline across clouds.
+- Teams that need to show their clusters align with the CCC controls catalog.
+- Cloud providers looking for the baseline controls their managed Kubernetes services need to support.
 
-Windows:
+## Blueprints
 
-```sh
-edit autoexec.bat
-```
+| Cloud | Directory | Status |
+|-------|-----------|--------|
+| Azure Kubernetes Service | [`aks/`](aks) | Initial implementation |
+| Amazon Elastic Kubernetes Service | `eks/` | Planned |
+| Google Kubernetes Engine | `gke/` | Planned |
+
+Each blueprint is a standard Terraform module. Callers supply a small configuration covering the cluster name, region, networking, node-pool sizing, and identity bindings, then run the blueprint with `terraform plan` and `terraform apply` or from their own CI/CD pipeline.
 
 ## Usage example
 
-A few motivating and useful examples of how your project can be used. Spice this up with code blocks and potentially screenshots / videos ([LiceCap](https://www.cockos.com/licecap/) is great for this kind of thing).
+```hcl
+module "aks" {
+  source = "github.com/finos/ccc-managed-k8s//aks"
 
-_For more examples and usage, please refer to the [Wiki][wiki]._
+  name               = "example-aks"
+  location           = "eastus2"
+  resource_group_id  = "/subscriptions/<subscription-id>/resourceGroups/example-rg"
+  kubernetes_version = "1.32"
+  # Networking, identity, encryption, and node pool inputs: see aks/README.md
+}
+```
+
+See the [AKS blueprint README](aks/README.md) for the enforced baseline, all inputs, and a complete example.
 
 ## Development setup
 
-Describe how to install all development dependencies and how to run an automated test-suite of some kind. Potentially do this for multiple platforms.
+You need [Terraform](https://developer.hashicorp.com/terraform/install) 1.9 or later. Each blueprint includes native Terraform tests (`*.tftest.hcl`) that run against mocked providers, so no cloud credentials are needed:
 
 ```sh
-make install
-npm test
+cd aks
+terraform init -backend=false
+terraform fmt -check -recursive
+terraform validate
+terraform test
 ```
+
+These tests can be combined with CCC control tests, such as Rego policies, for end-to-end compliance checks.
+
+## Dependencies
+
+The blueprints reference public Terraform providers by version and do not redistribute third-party source code. The AKS blueprint uses:
+
+- [`Azure/azapi`](https://registry.terraform.io/providers/Azure/azapi/latest) (MPL-2.0)
 
 ## Roadmap
 
-List the roadmap steps; alternatively link the Confluence Wiki page where the project roadmap is published.
-
-1. Item 1
-2. Item 2
-3. ....
+1. AKS blueprint: initial implementation (this release).
+2. Map each blueprint setting to the CCC controls catalog.
+3. Add the EKS and GKE blueprints.
+4. Pair the Terraform tests with CCC control tests for end-to-end compliance checks.
 
 ## Contributing
-For any questions, bugs or feature requests please open an [issue](https://github.com/finos/{project slug}/issues)
-For anything else please send an email to {project mailing list}.
+
+For questions, bugs, or feature requests, please open an [issue](https://github.com/finos/ccc-managed-k8s/issues). For broader discussion of the controls themselves, see the [Common Cloud Controls](https://github.com/finos/common-cloud-controls) project.
 
 To submit a contribution:
-1. Fork it (<https://github.com/finos/{project slug}/fork>)
+
+1. Fork it (<https://github.com/finos/ccc-managed-k8s/fork>)
 2. Create your feature branch (`git checkout -b feature/fooBar`)
 3. Read our [contribution guidelines](CONTRIBUTING.md) and [Community Code of Conduct](https://www.finos.org/code-of-conduct)
 4. Commit your changes (`git commit -am 'Add some fooBar'`)
