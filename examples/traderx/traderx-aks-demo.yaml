@@ -1,0 +1,3180 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: traderx
+---
+apiVersion: v1
+data:
+  001-initialSchema.sql: |
+    DROP TABLE IF EXISTS trades;
+    DROP TABLE IF EXISTS orderbook;
+    DROP TABLE IF EXISTS accountusers;
+    DROP TABLE IF EXISTS positions;
+    DROP TABLE IF EXISTS accounts;
+    DROP SEQUENCE IF EXISTS accounts_seq;
+
+    CREATE TABLE accounts (
+      id INTEGER PRIMARY KEY,
+      displayname VARCHAR(50)
+    );
+
+    CREATE TABLE accountusers (
+      accountid INTEGER NOT NULL,
+      username VARCHAR(15) NOT NULL,
+      PRIMARY KEY (accountid, username),
+      FOREIGN KEY (accountid) REFERENCES accounts(id)
+    );
+
+    CREATE TABLE positions (
+      accountid INTEGER,
+      security VARCHAR(15),
+      updated TIMESTAMP,
+      quantity INTEGER,
+      averagecostbasis DECIMAL(18,3),
+      PRIMARY KEY (accountid, security),
+      FOREIGN KEY (accountid) REFERENCES accounts(id)
+    );
+
+    CREATE TABLE trades (
+      id VARCHAR(50) PRIMARY KEY,
+      accountid INTEGER REFERENCES accounts(id),
+      created TIMESTAMP,
+      updated TIMESTAMP,
+      security VARCHAR(15),
+      side VARCHAR(10) CHECK (side in ('Buy', 'Sell')),
+      quantity INTEGER CHECK (quantity > 0),
+      price DECIMAL(18,3),
+      state VARCHAR(20) CHECK (state in ('New', 'Processing', 'Settled', 'Cancelled'))
+    );
+
+    CREATE TABLE orderbook (
+      orderid VARCHAR(32) PRIMARY KEY,
+      accountid INTEGER NOT NULL,
+      security VARCHAR(16) NOT NULL,
+      side VARCHAR(16) CHECK (side in ('Buy', 'Sell')),
+      quantity INTEGER NOT NULL CHECK (quantity > 0),
+      remainingquantity INTEGER NOT NULL CHECK (remainingquantity >= 0),
+      limitprice DECIMAL(18,3) NOT NULL,
+      status VARCHAR(24) CHECK (status in ('NEW', 'PARTIALLY_FILLED', 'FILLED', 'CANCELED', 'REJECTED')),
+      createdat TIMESTAMP NOT NULL,
+      updatedat TIMESTAMP NOT NULL,
+      lastexecutionprice DECIMAL(18,3),
+      lastfillquantity INTEGER
+    );
+    CREATE INDEX idx_orderbook_status ON orderbook(status);
+    CREATE INDEX idx_orderbook_updatedat ON orderbook(updatedat);
+
+    CREATE SEQUENCE accounts_seq START WITH 65000 INCREMENT BY 1;
+
+    INSERT INTO accounts (id, displayname) VALUES (22214, 'Test Account 20');
+    INSERT INTO accounts (id, displayname) VALUES (11413, 'Private Clients Fund TTXX');
+    INSERT INTO accounts (id, displayname) VALUES (42422, 'Algo Execution Partners');
+    INSERT INTO accounts (id, displayname) VALUES (52355, 'Big Corporate Fund');
+    INSERT INTO accounts (id, displayname) VALUES (62654, 'Hedge Fund TXY1');
+    INSERT INTO accounts (id, displayname) VALUES (10031, 'Internal Trading Book');
+    INSERT INTO accounts (id, displayname) VALUES (44044, 'Trading Account 1');
+
+    INSERT INTO accountusers (accountid, username) VALUES (22214, 'user01');
+    INSERT INTO accountusers (accountid, username) VALUES (22214, 'user03');
+    INSERT INTO accountusers (accountid, username) VALUES (22214, 'user09');
+    INSERT INTO accountusers (accountid, username) VALUES (22214, 'user05');
+    INSERT INTO accountusers (accountid, username) VALUES (22214, 'user07');
+    INSERT INTO accountusers (accountid, username) VALUES (62654, 'user09');
+    INSERT INTO accountusers (accountid, username) VALUES (62654, 'user05');
+    INSERT INTO accountusers (accountid, username) VALUES (62654, 'user07');
+    INSERT INTO accountusers (accountid, username) VALUES (62654, 'user01');
+    INSERT INTO accountusers (accountid, username) VALUES (10031, 'user01');
+    INSERT INTO accountusers (accountid, username) VALUES (10031, 'user03');
+    INSERT INTO accountusers (accountid, username) VALUES (10031, 'user09');
+    INSERT INTO accountusers (accountid, username) VALUES (44044, 'user09');
+    INSERT INTO accountusers (accountid, username) VALUES (44044, 'user05');
+    INSERT INTO accountusers (accountid, username) VALUES (44044, 'user07');
+    INSERT INTO accountusers (accountid, username) VALUES (44044, 'user04');
+    INSERT INTO accountusers (accountid, username) VALUES (44044, 'user01');
+    INSERT INTO accountusers (accountid, username) VALUES (44044, 'user06');
+
+    INSERT INTO trades (id, created, updated, security, side, quantity, price, state, accountid) VALUES ('TRADE-22214-AABBCC', NOW(), NOW(), 'IBM', 'Sell', 100, 136.250, 'Settled', 22214);
+    INSERT INTO trades (id, created, updated, security, side, quantity, price, state, accountid) VALUES ('TRADE-22214-DDEEFF', NOW(), NOW(), 'MS', 'Buy', 1000, 95.125, 'Settled', 22214);
+    INSERT INTO trades (id, created, updated, security, side, quantity, price, state, accountid) VALUES ('TRADE-22214-GGHHII', NOW(), NOW(), 'C', 'Sell', 2000, 57.500, 'Settled', 22214);
+
+    INSERT INTO positions (accountid, security, updated, quantity, averagecostbasis) VALUES (22214, 'MS', NOW(), 1000, 95.125);
+    INSERT INTO positions (accountid, security, updated, quantity, averagecostbasis) VALUES (22214, 'IBM', NOW(), -100, 136.250);
+    INSERT INTO positions (accountid, security, updated, quantity, averagecostbasis) VALUES (22214, 'C', NOW(), -2000, 57.500);
+
+    INSERT INTO trades (id, created, updated, security, side, quantity, price, state, accountid) VALUES ('TRADE-52355-AABBCC', NOW(), NOW(), 'BAC', 'Sell', 2400, 41.125, 'Settled', 52355);
+    INSERT INTO positions (accountid, security, updated, quantity, averagecostbasis) VALUES (52355, 'BAC', NOW(), -2400, 41.125);
+kind: ConfigMap
+metadata:
+  name: database-init-sql
+  namespace: traderx
+---
+apiVersion: v1
+data:
+  default.conf: |
+    server {
+        listen 8080;
+        server_name localhost;
+
+        location = /health {
+            add_header Content-Type text/plain;
+            return 200 "ok\n";
+        }
+
+        location = /@vite/client {
+            return 404;
+        }
+
+        location ^~ /@fs/ {
+            return 404;
+        }
+
+        location /reference-data/ {
+            proxy_pass http://reference-data:18085/;
+        }
+
+        location /ng-cli-ws {
+            proxy_pass http://web-front-end-angular:18093/ng-cli-ws;
+            proxy_http_version 1.1;
+            proxy_set_header Upgrade $http_upgrade;
+            proxy_set_header Connection "upgrade";
+        }
+
+        location /nats-ws {
+            proxy_pass http://nats-broker:8081;
+            proxy_http_version 1.1;
+            proxy_set_header Upgrade $http_upgrade;
+            proxy_set_header Connection "upgrade";
+            proxy_set_header Host $http_host;
+        }
+
+        location /people-service/ {
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header Host $http_host;
+            proxy_set_header X-Forwarded-Host $http_host;
+            proxy_set_header X-Forwarded-Proto $scheme;
+            proxy_set_header X-Forwarded-Prefix /people-service;
+            proxy_pass http://people-service:18089/;
+        }
+
+        location /account-service/ {
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header Host $http_host;
+            proxy_set_header X-Forwarded-Host $http_host;
+            proxy_set_header X-Forwarded-Proto $scheme;
+            proxy_set_header X-Forwarded-Prefix /account-service;
+            proxy_pass http://account-service:18088/;
+        }
+
+        location /position-service/ {
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header Host $http_host;
+            proxy_set_header X-Forwarded-Host $http_host;
+            proxy_set_header X-Forwarded-Proto $scheme;
+            proxy_set_header X-Forwarded-Prefix /position-service;
+            proxy_pass http://position-service:18090/;
+        }
+
+        location /trade-service/ {
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header Host $http_host;
+            proxy_set_header X-Forwarded-Host $http_host;
+            proxy_set_header X-Forwarded-Proto $scheme;
+            proxy_set_header X-Forwarded-Prefix /trade-service;
+            proxy_pass http://trade-service:18092/;
+        }
+
+        location /trade-processor/ {
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header Host $http_host;
+            proxy_set_header X-Forwarded-Host $http_host;
+            proxy_set_header X-Forwarded-Proto $scheme;
+            proxy_set_header X-Forwarded-Prefix /trade-processor;
+            proxy_pass http://trade-processor:18091/;
+        }
+
+        location /price-publisher/ {
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header Host $http_host;
+            proxy_set_header X-Forwarded-Host $http_host;
+            proxy_set_header X-Forwarded-Proto $scheme;
+            proxy_set_header X-Forwarded-Prefix /price-publisher;
+            proxy_pass http://price-publisher:18100/;
+        }
+
+        location /order-matcher/ {
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header Host $http_host;
+            proxy_set_header X-Forwarded-Host $http_host;
+            proxy_set_header X-Forwarded-Proto $scheme;
+            proxy_set_header X-Forwarded-Prefix /order-matcher;
+            proxy_pass http://order-matcher:18110/;
+        }
+
+        location /grafana/ {
+            proxy_pass http://grafana:3000;
+            proxy_http_version 1.1;
+            proxy_set_header Host $http_host;
+            proxy_set_header X-Forwarded-Proto $scheme;
+            proxy_set_header X-Forwarded-Prefix /grafana;
+        }
+
+        location /prometheus/ {
+            proxy_pass http://prometheus:9090;
+            proxy_http_version 1.1;
+            proxy_set_header Host $http_host;
+            proxy_set_header X-Forwarded-Proto $scheme;
+        }
+
+        location = /api/docs {
+            return 301 /api/docs/;
+        }
+
+        location /api/docs/ {
+            proxy_pass http://api-explorer:8080/api/docs/;
+            proxy_http_version 1.1;
+            proxy_set_header Host $http_host;
+            proxy_set_header X-Forwarded-Proto $scheme;
+            proxy_set_header X-Forwarded-Prefix /api/docs;
+        }
+
+        location / {
+            proxy_pass http://web-front-end-angular:18093/;
+            proxy_http_version 1.1;
+            proxy_set_header Upgrade $http_upgrade;
+            proxy_set_header Connection "upgrade";
+        }
+    }
+kind: ConfigMap
+metadata:
+  name: edge-proxy-config
+  namespace: traderx
+---
+apiVersion: v1
+data:
+  nats.conf: |
+    port: 4222
+    http: 8222
+
+    websocket {
+      port: 8081
+      no_tls: true
+    }
+kind: ConfigMap
+metadata:
+  name: nats-config
+  namespace: traderx
+---
+apiVersion: v1
+data:
+  blackbox.yml: |
+    modules:
+      http_2xx:
+        prober: http
+        timeout: 5s
+        http:
+          preferred_ip_protocol: "ip4"
+kind: ConfigMap
+metadata:
+  name: observability-blackbox-config
+  namespace: traderx
+---
+apiVersion: v1
+data:
+  dashboards.yaml: |
+    apiVersion: 1
+
+    providers:
+      - name: TraderX Dashboards
+        orgId: 1
+        folder: TraderX
+        type: file
+        disableDeletion: false
+        updateIntervalSeconds: 30
+        options:
+          path: /var/lib/grafana/dashboards
+kind: ConfigMap
+metadata:
+  name: observability-grafana-dashboard-providers
+  namespace: traderx
+---
+apiVersion: v1
+data:
+  traderx-logs-errors.json: |
+    {
+      "panels": [
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "lines/s"
+            }
+          },
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 0,
+            "y": 0
+          },
+          "id": 1,
+          "options": {
+            "legend": {
+              "displayMode": "table",
+              "placement": "bottom"
+            }
+          },
+          "targets": [
+            {
+              "expr": "sum by (service) (rate({compose_project=\"traderx-state-009\",service=~\"$service\"}[1m]))",
+              "refId": "A"
+            }
+          ],
+          "title": "Log Throughput by Service",
+          "type": "timeseries"
+        },
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "lines/s"
+            }
+          },
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 12,
+            "y": 0
+          },
+          "id": 2,
+          "options": {
+            "legend": {
+              "displayMode": "table",
+              "placement": "bottom"
+            }
+          },
+          "targets": [
+            {
+              "expr": "sum by (service) (rate({compose_project=\"traderx-state-009\",service=~\"$service\"} |~ \"(?i)(error|warn|exception|fail)\" [1m]))",
+              "refId": "A"
+            }
+          ],
+          "title": "Error/Warn Throughput by Service",
+          "type": "timeseries"
+        },
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "gridPos": {
+            "h": 10,
+            "w": 24,
+            "x": 0,
+            "y": 8
+          },
+          "id": 3,
+          "options": {
+            "enableLogDetails": true,
+            "showLabels": true,
+            "showTime": true,
+            "wrapLogMessage": true
+          },
+          "targets": [
+            {
+              "expr": "{compose_project=\"traderx-state-009\",service=~\"$service\"}",
+              "refId": "A"
+            }
+          ],
+          "title": "Live Logs (Selected Services)",
+          "type": "logs"
+        },
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "gridPos": {
+            "h": 10,
+            "w": 24,
+            "x": 0,
+            "y": 18
+          },
+          "id": 4,
+          "options": {
+            "enableLogDetails": true,
+            "showLabels": true,
+            "showTime": true,
+            "wrapLogMessage": true
+          },
+          "targets": [
+            {
+              "expr": "{compose_project=\"traderx-state-009\",service=~\"$service\"} |~ \"(?i)(error|warn|exception|fail)\"",
+              "refId": "A"
+            }
+          ],
+          "title": "Error Focus",
+          "type": "logs"
+        }
+      ],
+      "refresh": "10s",
+      "schemaVersion": 39,
+      "tags": [
+        "traderx",
+        "logs",
+        "provisioned"
+      ],
+      "templating": {
+        "list": [
+          {
+            "current": {
+              "text": "All",
+              "value": [
+                "$__all"
+              ]
+            },
+            "datasource": {
+              "type": "loki",
+              "uid": "loki"
+            },
+            "includeAll": true,
+            "label": "Service",
+            "multi": true,
+            "name": "service",
+            "query": "label_values({compose_project=\"traderx-state-009\"}, service)",
+            "type": "query"
+          }
+        ]
+      },
+      "time": {
+        "from": "now-30m",
+        "to": "now"
+      },
+      "timezone": "browser",
+      "title": "TraderX Logs & Errors",
+      "uid": "traderx-logs-errors"
+    }
+  traderx-message-bus-connectivity.json: |
+    {
+      "id": null,
+      "uid": "traderx-message-bus-connectivity",
+      "title": "TraderX Message Bus Connectivity",
+      "tags": [
+        "traderx",
+        "messaging",
+        "health"
+      ],
+      "timezone": "",
+      "schemaVersion": 39,
+      "version": 1,
+      "refresh": "10s",
+      "panels": [
+        {
+          "id": 1,
+          "title": "Message Bus Connectivity (1=Connected)",
+          "type": "timeseries",
+          "gridPos": {
+            "h": 10,
+            "w": 24,
+            "x": 0,
+            "y": 0
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "traderx_messagebus_connected",
+              "legendFormat": "{{component}}/{{role}}",
+              "instant": false,
+              "range": true
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "min": 0,
+              "max": 1,
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "value": null,
+                    "color": "red"
+                  },
+                  {
+                    "value": 1,
+                    "color": "green"
+                  }
+                ]
+              },
+              "mappings": []
+            },
+            "overrides": []
+          },
+          "options": {
+            "legend": {
+              "displayMode": "table",
+              "placement": "bottom",
+              "showLegend": true
+            },
+            "tooltip": {
+              "mode": "multi"
+            }
+          }
+        }
+      ],
+      "templating": {
+        "list": []
+      },
+      "annotations": {
+        "list": []
+      },
+      "time": {
+        "from": "now-30m",
+        "to": "now"
+      },
+      "timepicker": {}
+    }
+  traderx-nats-messaging-overview.json: |
+    {
+      "id": null,
+      "uid": "traderx-nats-messaging-overview",
+      "title": "TraderX NATS Messaging Overview",
+      "tags": ["traderx", "nats", "messaging", "provisioned"],
+      "timezone": "browser",
+      "schemaVersion": 39,
+      "version": 1,
+      "refresh": "10s",
+      "time": { "from": "now-30m", "to": "now" },
+      "panels": [
+        {"id": 1, "type": "stat", "title": "NATS Monitor Endpoint", "datasource": { "type": "prometheus", "uid": "prometheus" }, "gridPos": { "h": 4, "w": 6, "x": 0, "y": 0 }, "targets": [{ "refId": "A", "expr": "max(probe_success{job=\"traderx-http-probe\",instance=\"http://nats-broker:8222/varz\"})" }], "fieldConfig": {"defaults": {"min": 0, "max": 1, "thresholds": {"mode": "absolute", "steps": [{"color": "red", "value": null}, {"color": "green", "value": 1}]}}}},
+        {"id": 2, "type": "stat", "title": "Ingress NATS-WS Route", "datasource": { "type": "prometheus", "uid": "prometheus" }, "gridPos": { "h": 4, "w": 6, "x": 6, "y": 0 }, "targets": [{ "refId": "A", "expr": "max(probe_success{job=\"traderx-http-probe\",instance=\"http://ingress:8080/nats-ws\"})" }], "fieldConfig": {"defaults": {"min": 0, "max": 1, "thresholds": {"mode": "absolute", "steps": [{"color": "orange", "value": null}, {"color": "green", "value": 1}]}}}},
+        {"id": 3, "type": "timeseries", "title": "NATS + Gateway Endpoint Latency", "datasource": { "type": "prometheus", "uid": "prometheus" }, "gridPos": { "h": 8, "w": 12, "x": 0, "y": 4 }, "targets": [{ "refId": "A", "expr": "probe_duration_seconds{job=\"traderx-http-probe\",instance=~\"http://nats-broker:8222/varz|http://ingress:8080/nats-ws\"}" }], "fieldConfig": {"defaults": {"unit": "s", "decimals": 3}}, "options": {"legend": {"displayMode": "table", "placement": "bottom"}}},
+        {"id": 4, "type": "timeseries", "title": "NATS + Messaging Service Log Throughput", "datasource": { "type": "loki", "uid": "loki" }, "gridPos": { "h": 8, "w": 12, "x": 12, "y": 4 }, "targets": [{ "refId": "A", "expr": "sum by (service) (rate({compose_project=\"traderx-state-009\",service=~\"nats-broker|trade-service|trade-processor|web-front-end-angular\"}[1m]))" }], "fieldConfig": {"defaults": {"unit": "lines/s"}}, "options": {"legend": {"displayMode": "table", "placement": "bottom"}}},
+        {"id": 5, "type": "logs", "title": "NATS Broker Logs", "datasource": { "type": "loki", "uid": "loki" }, "gridPos": { "h": 8, "w": 12, "x": 0, "y": 12 }, "targets": [{ "refId": "A", "expr": "{compose_project=\"traderx-state-009\",service=\"nats-broker\"}" }], "options": {"showLabels": true, "showTime": true, "wrapLogMessage": true, "enableLogDetails": true}},
+        {"id": 6, "type": "logs", "title": "Messaging Errors (Trade/Processor/Web)", "datasource": { "type": "loki", "uid": "loki" }, "gridPos": { "h": 8, "w": 12, "x": 12, "y": 12 }, "targets": [{ "refId": "A", "expr": "{compose_project=\"traderx-state-009\",service=~\"trade-service|trade-processor|web-front-end-angular\"} |~ \"(?i)(error|warn|exception|fail|nats|websocket)\"" }], "options": {"showLabels": true, "showTime": true, "wrapLogMessage": true, "enableLogDetails": true}}
+      ]
+    }
+  traderx-observability-control-plane.json: |
+    {
+      "panels": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "max": 1,
+              "min": 0,
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "red",
+                    "value": null
+                  },
+                  {
+                    "color": "green",
+                    "value": 1
+                  }
+                ]
+              }
+            }
+          },
+          "gridPos": {
+            "h": 4,
+            "w": 6,
+            "x": 0,
+            "y": 0
+          },
+          "id": 1,
+          "targets": [
+            {
+              "expr": "up{job=\"prometheus\"}",
+              "refId": "A"
+            }
+          ],
+          "title": "Prometheus Up",
+          "type": "stat"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "none"
+            }
+          },
+          "gridPos": {
+            "h": 4,
+            "w": 6,
+            "x": 6,
+            "y": 0
+          },
+          "id": 2,
+          "targets": [
+            {
+              "expr": "sum(up{job=\"otel-collector\"})",
+              "refId": "A"
+            }
+          ],
+          "title": "OTel Collector Targets Up",
+          "type": "stat"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "max": 1,
+              "min": 0,
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "red",
+                    "value": null
+                  },
+                  {
+                    "color": "green",
+                    "value": 1
+                  }
+                ]
+              }
+            }
+          },
+          "gridPos": {
+            "h": 4,
+            "w": 6,
+            "x": 12,
+            "y": 0
+          },
+          "id": 3,
+          "targets": [
+            {
+              "expr": "up{job=\"blackbox-exporter\"}",
+              "refId": "A"
+            }
+          ],
+          "title": "Blackbox Exporter Up",
+          "type": "stat"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "none"
+            }
+          },
+          "gridPos": {
+            "h": 4,
+            "w": 6,
+            "x": 18,
+            "y": 0
+          },
+          "id": 4,
+          "targets": [
+            {
+              "expr": "sum(otelcol_exporter_queue_size)",
+              "refId": "A"
+            }
+          ],
+          "title": "OTel Exporter Queue Size",
+          "type": "stat"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "bytes"
+            }
+          },
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 0,
+            "y": 4
+          },
+          "id": 5,
+          "options": {
+            "legend": {
+              "displayMode": "table",
+              "placement": "bottom"
+            }
+          },
+          "targets": [
+            {
+              "expr": "process_resident_memory_bytes{job=~\"prometheus|blackbox-exporter\"}",
+              "refId": "A"
+            },
+            {
+              "expr": "otelcol_process_memory_rss",
+              "refId": "B"
+            }
+          ],
+          "title": "Observability Process RSS",
+          "type": "timeseries"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "none"
+            }
+          },
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 12,
+            "y": 4
+          },
+          "id": 6,
+          "options": {
+            "legend": {
+              "displayMode": "table",
+              "placement": "bottom"
+            }
+          },
+          "targets": [
+            {
+              "expr": "otelcol_exporter_queue_size",
+              "refId": "A"
+            },
+            {
+              "expr": "otelcol_exporter_queue_capacity",
+              "refId": "B"
+            }
+          ],
+          "title": "OTel Exporter Queue (size/capacity)",
+          "type": "timeseries"
+        },
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "gridPos": {
+            "h": 10,
+            "w": 24,
+            "x": 0,
+            "y": 12
+          },
+          "id": 7,
+          "options": {
+            "enableLogDetails": true,
+            "showLabels": true,
+            "showTime": true,
+            "wrapLogMessage": true
+          },
+          "targets": [
+            {
+              "expr": "{compose_project=\"traderx-state-009\",service=~\"grafana|loki|tempo|otel-collector|prometheus|promtail\"}",
+              "refId": "A"
+            }
+          ],
+          "title": "Control Plane Logs (Grafana/Loki/Tempo/OTel/Prometheus)",
+          "type": "logs"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "gridPos": {
+            "h": 6,
+            "w": 24,
+            "x": 0,
+            "y": 22
+          },
+          "id": 8,
+          "options": {
+            "content": "### Tempo is wired and ready\n- Data source: **Tempo**\n- Open Explore with Tempo selected and run TraceQL search: `{}`\n- In this base state, spans appear once services emit OTLP traces (current stack is ready for that next step).",
+            "mode": "markdown"
+          },
+          "title": "Tempo / Trace Exploration",
+          "type": "text"
+        }
+      ],
+      "refresh": "10s",
+      "schemaVersion": 39,
+      "tags": [
+        "traderx",
+        "observability",
+        "provisioned"
+      ],
+      "time": {
+        "from": "now-30m",
+        "to": "now"
+      },
+      "timezone": "browser",
+      "title": "TraderX Observability Control Plane",
+      "uid": "traderx-obs-control-plane"
+    }
+  traderx-order-management-observability.json: |
+    {
+      "id": null,
+      "uid": "traderx-order-management-observability",
+      "title": "TraderX Order Management Observability",
+      "tags": [
+        "traderx",
+        "orders",
+        "provisioned"
+      ],
+      "timezone": "browser",
+      "schemaVersion": 39,
+      "version": 1,
+      "refresh": "10s",
+      "time": {
+        "from": "now-30m",
+        "to": "now"
+      },
+      "panels": [
+        {
+          "id": 1,
+          "type": "stat",
+          "title": "Open Orders",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "gridPos": {
+            "h": 4,
+            "w": 6,
+            "x": 0,
+            "y": 0
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "max(traderx_orders_open_total)"
+            }
+          ]
+        },
+        {
+          "id": 2,
+          "type": "stat",
+          "title": "Unfilled Orders",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "gridPos": {
+            "h": 4,
+            "w": 6,
+            "x": 6,
+            "y": 0
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "max(traderx_orders_unfilled_total)"
+            }
+          ]
+        },
+        {
+          "id": 3,
+          "type": "timeseries",
+          "title": "Order Events by Type",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 0,
+            "y": 4
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "sum by (event) (rate(traderx_order_events_total[5m]))"
+            }
+          ],
+          "options": {
+            "legend": {
+              "displayMode": "table",
+              "placement": "bottom"
+            }
+          }
+        },
+        {
+          "id": 4,
+          "type": "timeseries",
+          "title": "Matcher p95 Latency (5m)",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 12,
+            "y": 4
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "histogram_quantile(0.95, sum(rate(traderx_order_match_latency_seconds_bucket[5m])) by (le))"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "s",
+              "decimals": 3
+            }
+          }
+        },
+        {
+          "id": 5,
+          "type": "timeseries",
+          "title": "Pending Orders by Side",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 0,
+            "y": 12
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "traderx_orders_pending_by_side"
+            }
+          ],
+          "options": {
+            "legend": {
+              "displayMode": "table",
+              "placement": "bottom"
+            }
+          }
+        },
+        {
+          "id": 6,
+          "type": "logs",
+          "title": "Order Matcher Logs",
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 12,
+            "y": 12
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "{compose_project=\"traderx-state-009\",service=\"order-matcher\"}"
+            }
+          ],
+          "options": {
+            "showLabels": true,
+            "showTime": true,
+            "wrapLogMessage": true,
+            "enableLogDetails": true
+          }
+        }
+      ]
+    }
+  traderx-order-matcher-sli.json: |
+    {
+      "uid": "traderx-order-matcher-sli",
+      "title": "TraderX Order Matcher SLI",
+      "schemaVersion": 39,
+      "refresh": "10s",
+      "tags": ["traderx", "orders", "matcher", "prometheus", "provisioned"],
+      "time": { "from": "now-30m", "to": "now" },
+      "panels": [
+        {
+          "id": 1,
+          "type": "stat",
+          "title": "Open Orders",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "gridPos": { "h": 5, "w": 6, "x": 0, "y": 0 },
+          "targets": [{ "refId": "A", "expr": "max(traderx_orders_open_total)" }]
+        },
+        {
+          "id": 2,
+          "type": "stat",
+          "title": "Unfilled Orders",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "gridPos": { "h": 5, "w": 6, "x": 6, "y": 0 },
+          "targets": [{ "refId": "A", "expr": "max(traderx_orders_unfilled_total)" }]
+        },
+        {
+          "id": 3,
+          "type": "stat",
+          "title": "Order Matcher Actuator Up",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "gridPos": { "h": 5, "w": 6, "x": 12, "y": 0 },
+          "targets": [{ "refId": "A", "expr": "max(up{job=\"traderx-spring-boot-actuator\",instance=~\".*order-matcher.*\"})" }],
+          "fieldConfig": {
+            "defaults": {
+              "min": 0,
+              "max": 1,
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  { "color": "red", "value": null },
+                  { "color": "green", "value": 1 }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "id": 4,
+          "type": "stat",
+          "title": "Order Matcher HTTP p95 (s)",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "gridPos": { "h": 5, "w": 6, "x": 18, "y": 0 },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "histogram_quantile(0.95, sum by (le) (rate(http_server_requests_seconds_bucket{job=\"traderx-spring-boot-actuator\",instance=~\".*order-matcher.*\"}[5m])))"
+            }
+          ],
+          "fieldConfig": { "defaults": { "unit": "s" } }
+        },
+        {
+          "id": 5,
+          "type": "timeseries",
+          "title": "Order Event Rate (5m)",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 5 },
+          "targets": [
+            { "refId": "A", "expr": "sum by (event) (rate(traderx_order_events_total[5m]))" }
+          ],
+          "options": { "legend": { "displayMode": "table", "placement": "bottom" } }
+        },
+        {
+          "id": 6,
+          "type": "timeseries",
+          "title": "Matcher Latency p95 (s)",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 5 },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "histogram_quantile(0.95, sum by (le) (rate(traderx_order_match_latency_seconds_bucket[5m])))"
+            }
+          ],
+          "fieldConfig": { "defaults": { "unit": "s" } }
+        }
+      ]
+    }
+  traderx-pricing-observability.json: |
+    {
+      "id": null,
+      "uid": "traderx-pricing-observability",
+      "title": "TraderX Pricing + Observability",
+      "tags": ["traderx", "pricing", "observability", "market-data"],
+      "timezone": "browser",
+      "schemaVersion": 39,
+      "version": 1,
+      "refresh": "10s",
+      "time": {
+        "from": "now-30m",
+        "to": "now"
+      },
+      "panels": [
+        {
+          "id": 1,
+          "type": "timeseries",
+          "title": "Endpoint Probe Success",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "probe_success{job=\"traderx-http-probe\"}",
+              "legendFormat": "{{instance}}"
+            }
+          ]
+        },
+        {
+          "id": 2,
+          "type": "timeseries",
+          "title": "Probe P95 Latency (seconds)",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "histogram_quantile(0.95, sum by (le, instance) (rate(probe_duration_seconds_bucket{job=\"traderx-http-probe\"}[5m])))",
+              "legendFormat": "{{instance}}"
+            }
+          ]
+        },
+        {
+          "id": 3,
+          "type": "stat",
+          "title": "Price Publisher Availability",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "gridPos": { "h": 6, "w": 8, "x": 0, "y": 8 },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "max(probe_success{job=\"traderx-http-probe\",instance=\"http://price-publisher:18100/health\"})"
+            }
+          ],
+          "options": {
+            "reduceOptions": {
+              "calcs": ["lastNotNull"],
+              "fields": "",
+              "values": false
+            }
+          }
+        },
+        {
+          "id": 4,
+          "type": "stat",
+          "title": "NATS Monitor Availability",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "gridPos": { "h": 6, "w": 8, "x": 8, "y": 8 },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "max(probe_success{job=\"traderx-http-probe\",instance=\"http://nats-broker:8222/varz\"})"
+            }
+          ],
+          "options": {
+            "reduceOptions": {
+              "calcs": ["lastNotNull"],
+              "fields": "",
+              "values": false
+            }
+          }
+        },
+        {
+          "id": 5,
+          "type": "table",
+          "title": "Latest HTTP Status by Endpoint",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "gridPos": { "h": 6, "w": 8, "x": 16, "y": 8 },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "max by (instance) (probe_http_status_code{job=\"traderx-http-probe\"})",
+              "format": "table",
+              "instant": true
+            }
+          ]
+        },
+        {
+          "id": 6,
+          "type": "timeseries",
+          "title": "Container Log Throughput (lines / 5m)",
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 14 },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "sum by (service) (count_over_time({job=\"traderx-docker\", service=~\".+\"}[5m]))"
+            }
+          ]
+        },
+        {
+          "id": 7,
+          "type": "logs",
+          "title": "Price Publisher / Trade Logs",
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 14 },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "{job=\"traderx-docker\", service=~\"price-publisher|trade-service|trade-processor\"}"
+            }
+          ],
+          "options": {
+            "showLabels": true,
+            "showTime": true,
+            "sortOrder": "Descending"
+          }
+        }
+      ]
+    }
+  traderx-pricing-pipeline-health.json: |
+    {
+      "id": null,
+      "uid": "traderx-pricing-pipeline-health",
+      "title": "TraderX Pricing Pipeline Health",
+      "tags": ["traderx", "pricing", "messaging", "provisioned"],
+      "timezone": "browser",
+      "schemaVersion": 39,
+      "version": 1,
+      "refresh": "10s",
+      "time": { "from": "now-30m", "to": "now" },
+      "panels": [
+        {"id": 1, "type": "stat", "title": "Price Publisher Health", "datasource": { "type": "prometheus", "uid": "prometheus" }, "gridPos": { "h": 4, "w": 6, "x": 0, "y": 0 }, "targets": [{ "refId": "A", "expr": "max(probe_success{job=\"traderx-http-probe\",instance=\"http://price-publisher:18100/health\"})" }], "fieldConfig": {"defaults": {"min": 0, "max": 1, "thresholds": {"mode": "absolute", "steps": [{"color": "red", "value": null}, {"color": "green", "value": 1}]}}}},
+        {"id": 2, "type": "stat", "title": "NATS Monitor Health", "datasource": { "type": "prometheus", "uid": "prometheus" }, "gridPos": { "h": 4, "w": 6, "x": 6, "y": 0 }, "targets": [{ "refId": "A", "expr": "max(probe_success{job=\"traderx-http-probe\",instance=\"http://nats-broker:8222/varz\"})" }], "fieldConfig": {"defaults": {"min": 0, "max": 1, "thresholds": {"mode": "absolute", "steps": [{"color": "red", "value": null}, {"color": "green", "value": 1}]}}}},
+        {"id": 3, "type": "stat", "title": "Pricing Endpoint p95 (5m)", "datasource": { "type": "prometheus", "uid": "prometheus" }, "gridPos": { "h": 4, "w": 6, "x": 12, "y": 0 }, "targets": [{ "refId": "A", "expr": "quantile_over_time(0.95, probe_duration_seconds{job=\"traderx-http-probe\",instance=\"http://price-publisher:18100/prices/IBM\"}[5m])" }], "fieldConfig": {"defaults": {"unit": "s", "decimals": 3}}},
+        {"id": 4, "type": "stat", "title": "Trade API p95 (5m)", "datasource": { "type": "prometheus", "uid": "prometheus" }, "gridPos": { "h": 4, "w": 6, "x": 18, "y": 0 }, "targets": [{ "refId": "A", "expr": "quantile_over_time(0.95, probe_duration_seconds{job=\"traderx-http-probe\",instance=\"http://trade-service:18092/v3/api-docs\"}[5m])" }], "fieldConfig": {"defaults": {"unit": "s", "decimals": 3}}},
+        {"id": 5, "type": "timeseries", "title": "Pricing + Trade Endpoints Success", "datasource": { "type": "prometheus", "uid": "prometheus" }, "gridPos": { "h": 8, "w": 12, "x": 0, "y": 4 }, "targets": [{ "refId": "A", "expr": "probe_success{job=\"traderx-http-probe\",instance=~\"http://price-publisher:18100/.*|http://trade-service:18092/.*|http://trade-processor:18091/system/health\"}" }], "fieldConfig": {"defaults": {"min": 0, "max": 1}}, "options": {"legend": {"displayMode": "table", "placement": "bottom"}}},
+        {"id": 6, "type": "timeseries", "title": "Pricing Pipeline Log Throughput", "datasource": { "type": "loki", "uid": "loki" }, "gridPos": { "h": 8, "w": 12, "x": 12, "y": 4 }, "targets": [{ "refId": "A", "expr": "sum by (service) (rate({compose_project=\"traderx-state-009\",service=~\"price-publisher|trade-service|trade-processor|position-service\"}[1m]))" }], "fieldConfig": {"defaults": {"unit": "lines/s"}}, "options": {"legend": {"displayMode": "table", "placement": "bottom"}}},
+        {"id": 7, "type": "logs", "title": "Pipeline Logs (Price / Trade / Position)", "datasource": { "type": "loki", "uid": "loki" }, "gridPos": { "h": 10, "w": 24, "x": 0, "y": 12 }, "targets": [{ "refId": "A", "expr": "{compose_project=\"traderx-state-009\",service=~\"price-publisher|trade-service|trade-processor|position-service\"}" }], "options": {"showLabels": true, "showTime": true, "wrapLogMessage": true, "enableLogDetails": true}}
+      ]
+    }
+  traderx-runtime-health.json: |
+    {
+      "panels": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "decimals": 2,
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "red",
+                    "value": null
+                  },
+                  {
+                    "color": "orange",
+                    "value": 95
+                  },
+                  {
+                    "color": "green",
+                    "value": 99
+                  }
+                ]
+              },
+              "unit": "percent"
+            }
+          },
+          "gridPos": {
+            "h": 4,
+            "w": 6,
+            "x": 0,
+            "y": 0
+          },
+          "id": 1,
+          "targets": [
+            {
+              "expr": "100 * avg_over_time(probe_success{job=\"traderx-http-probe\"}[5m])",
+              "refId": "A"
+            }
+          ],
+          "title": "Endpoint Availability % (5m)",
+          "type": "stat"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": null
+                  },
+                  {
+                    "color": "red",
+                    "value": 1
+                  }
+                ]
+              },
+              "unit": "none"
+            }
+          },
+          "gridPos": {
+            "h": 4,
+            "w": 6,
+            "x": 6,
+            "y": 0
+          },
+          "id": 2,
+          "targets": [
+            {
+              "expr": "count(probe_success{job=\"traderx-http-probe\"} == 0)",
+              "refId": "A"
+            }
+          ],
+          "title": "Failing Endpoints (now)",
+          "type": "stat"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "none"
+            }
+          },
+          "gridPos": {
+            "h": 4,
+            "w": 6,
+            "x": 12,
+            "y": 0
+          },
+          "id": 3,
+          "targets": [
+            {
+              "expr": "count(probe_success{job=\"traderx-http-probe\"})",
+              "refId": "A"
+            }
+          ],
+          "title": "Monitored Endpoints",
+          "type": "stat"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "decimals": 3,
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": null
+                  },
+                  {
+                    "color": "orange",
+                    "value": 0.5
+                  },
+                  {
+                    "color": "red",
+                    "value": 1.5
+                  }
+                ]
+              },
+              "unit": "s"
+            }
+          },
+          "gridPos": {
+            "h": 4,
+            "w": 6,
+            "x": 18,
+            "y": 0
+          },
+          "id": 4,
+          "targets": [
+            {
+              "expr": "quantile_over_time(0.95, probe_duration_seconds{job=\"traderx-http-probe\"}[5m])",
+              "refId": "A"
+            }
+          ],
+          "title": "Probe p95 Latency (5m)",
+          "type": "stat"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "max": 1,
+              "min": 0
+            }
+          },
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 0,
+            "y": 4
+          },
+          "id": 5,
+          "options": {
+            "legend": {
+              "displayMode": "table",
+              "placement": "bottom"
+            }
+          },
+          "targets": [
+            {
+              "expr": "probe_success{job=\"traderx-http-probe\"}",
+              "refId": "A"
+            }
+          ],
+          "title": "Endpoint Up/Down by Target",
+          "type": "timeseries"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "decimals": 3,
+              "unit": "s"
+            }
+          },
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 12,
+            "y": 4
+          },
+          "id": 6,
+          "options": {
+            "legend": {
+              "displayMode": "table",
+              "placement": "bottom"
+            }
+          },
+          "targets": [
+            {
+              "expr": "probe_duration_seconds{job=\"traderx-http-probe\"}",
+              "refId": "A"
+            }
+          ],
+          "title": "Probe Duration by Target",
+          "type": "timeseries"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 0,
+            "y": 12
+          },
+          "id": 7,
+          "options": {
+            "showHeader": true
+          },
+          "targets": [
+            {
+              "expr": "probe_success{job=\"traderx-http-probe\"}",
+              "instant": true,
+              "refId": "A"
+            }
+          ],
+          "title": "Current Endpoint Status",
+          "type": "table"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "none"
+            }
+          },
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 12,
+            "y": 12
+          },
+          "id": 8,
+          "options": {
+            "legend": {
+              "displayMode": "table",
+              "placement": "bottom"
+            }
+          },
+          "targets": [
+            {
+              "expr": "otelcol_exporter_queue_size",
+              "refId": "A"
+            },
+            {
+              "expr": "otelcol_exporter_queue_capacity",
+              "refId": "B"
+            }
+          ],
+          "title": "Collector Queue Size",
+          "type": "timeseries"
+        }
+      ],
+      "refresh": "10s",
+      "schemaVersion": 39,
+      "tags": [
+        "traderx",
+        "runtime",
+        "provisioned"
+      ],
+      "time": {
+        "from": "now-30m",
+        "to": "now"
+      },
+      "timezone": "browser",
+      "title": "TraderX Runtime Health",
+      "uid": "traderx-runtime-health"
+    }
+  traderx-spring-actuator-overview.json: |
+    {
+      "uid": "traderx-spring-actuator-overview",
+      "title": "TraderX Spring Actuator Overview",
+      "schemaVersion": 39,
+      "refresh": "10s",
+      "tags": ["traderx", "spring", "prometheus", "provisioned"],
+      "time": { "from": "now-30m", "to": "now" },
+      "templating": {
+        "list": [
+          {
+            "name": "instance",
+            "type": "query",
+            "label": "Instance",
+            "datasource": { "type": "prometheus", "uid": "prometheus" },
+            "query": "label_values(up{job=\"traderx-spring-boot-actuator\"}, instance)",
+            "includeAll": true,
+            "multi": true,
+            "current": { "text": "All", "value": ["$__all"] }
+          }
+        ]
+      },
+      "panels": [
+        {
+          "id": 1,
+          "type": "timeseries",
+          "title": "HTTP Request Rate (req/s)",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+          "targets": [
+            { "refId": "A", "expr": "sum by (instance) (rate(http_server_requests_seconds_count{job=\"traderx-spring-boot-actuator\",instance=~\"$instance\"}[5m]))" }
+          ]
+        },
+        {
+          "id": 2,
+          "type": "timeseries",
+          "title": "HTTP p95 Latency (s)",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+          "targets": [
+            { "refId": "A", "expr": "histogram_quantile(0.95, sum by (instance, le) (rate(http_server_requests_seconds_bucket{job=\"traderx-spring-boot-actuator\",instance=~\"$instance\"}[5m])))" }
+          ]
+        },
+        {
+          "id": 3,
+          "type": "timeseries",
+          "title": "JVM Heap Used (bytes)",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+          "targets": [
+            { "refId": "A", "expr": "sum by (instance) (jvm_memory_used_bytes{job=\"traderx-spring-boot-actuator\",area=\"heap\",instance=~\"$instance\"})" }
+          ]
+        },
+        {
+          "id": 4,
+          "type": "stat",
+          "title": "Actuator Targets Up",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+          "targets": [
+            { "refId": "A", "expr": "sum(up{job=\"traderx-spring-boot-actuator\",instance=~\"$instance\"})" }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "min": 0,
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  { "color": "red", "value": null },
+                  { "color": "green", "value": 1 }
+                ]
+              }
+            }
+          }
+        }
+      ]
+    }
+  traderx-spring-service-sli.json: |
+    {
+      "uid": "traderx-spring-service-sli",
+      "title": "TraderX Spring Service SLI",
+      "schemaVersion": 39,
+      "refresh": "10s",
+      "tags": ["traderx", "spring", "sli", "prometheus", "provisioned"],
+      "time": { "from": "now-30m", "to": "now" },
+      "templating": {
+        "list": [
+          {
+            "name": "instance",
+            "type": "query",
+            "label": "Instance",
+            "datasource": { "type": "prometheus", "uid": "prometheus" },
+            "query": "label_values(up{job=\"traderx-spring-boot-actuator\"}, instance)",
+            "includeAll": true,
+            "multi": true,
+            "current": { "text": "All", "value": ["$__all"] }
+          }
+        ]
+      },
+      "panels": [
+        {
+          "id": 1,
+          "type": "stat",
+          "title": "Scrape Target Availability Ratio",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "gridPos": { "h": 6, "w": 6, "x": 0, "y": 0 },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "sum(up{job=\"traderx-spring-boot-actuator\",instance=~\"$instance\"}) / clamp_min(count(up{job=\"traderx-spring-boot-actuator\",instance=~\"$instance\"}), 1)"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "min": 0,
+              "max": 1,
+              "unit": "percentunit",
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  { "color": "red", "value": null },
+                  { "color": "yellow", "value": 0.9 },
+                  { "color": "green", "value": 1.0 }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "id": 2,
+          "type": "timeseries",
+          "title": "HTTP 5xx Rate (req/s)",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "gridPos": { "h": 6, "w": 18, "x": 6, "y": 0 },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "sum by (instance) (rate(http_server_requests_seconds_count{job=\"traderx-spring-boot-actuator\",status=~\"5..\",instance=~\"$instance\"}[5m]))"
+            }
+          ],
+          "options": { "legend": { "displayMode": "table", "placement": "bottom" } }
+        },
+        {
+          "id": 3,
+          "type": "timeseries",
+          "title": "Process CPU Usage (%)",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 6 },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "100 * max by (instance) (process_cpu_usage{job=\"traderx-spring-boot-actuator\",instance=~\"$instance\"})"
+            }
+          ],
+          "fieldConfig": { "defaults": { "unit": "percent", "min": 0 } }
+        },
+        {
+          "id": 4,
+          "type": "timeseries",
+          "title": "GC Pause p95 (s)",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 6 },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "histogram_quantile(0.95, sum by (instance, le) (rate(jvm_gc_pause_seconds_bucket{job=\"traderx-spring-boot-actuator\",instance=~\"$instance\"}[5m])))"
+            }
+          ],
+          "fieldConfig": { "defaults": { "unit": "s" } }
+        },
+        {
+          "id": 5,
+          "type": "timeseries",
+          "title": "Live Threads",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "gridPos": { "h": 8, "w": 24, "x": 0, "y": 14 },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "max by (instance) (jvm_threads_live_threads{job=\"traderx-spring-boot-actuator\",instance=~\"$instance\"})"
+            }
+          ],
+          "options": { "legend": { "displayMode": "table", "placement": "bottom" } }
+        }
+      ]
+    }
+kind: ConfigMap
+metadata:
+  name: observability-grafana-dashboards
+  namespace: traderx
+---
+apiVersion: v1
+data:
+  datasources.yaml: |
+    apiVersion: 1
+
+    datasources:
+      - name: Prometheus
+        uid: prometheus
+        type: prometheus
+        access: proxy
+        url: http://prometheus:9090/prometheus
+        isDefault: true
+
+      - name: Loki
+        uid: loki
+        type: loki
+        access: proxy
+        url: http://loki:3100
+
+      - name: Tempo
+        uid: tempo
+        type: tempo
+        access: proxy
+        url: http://tempo:3200
+        jsonData:
+          httpMethod: GET
+          tracesToLogs:
+            datasourceUid: loki
+          serviceMap:
+            datasourceUid: prometheus
+kind: ConfigMap
+metadata:
+  name: observability-grafana-datasources
+  namespace: traderx
+---
+apiVersion: v1
+data:
+  config.yaml: |
+    auth_enabled: false
+
+    server:
+      http_listen_port: 3100
+      grpc_listen_port: 9096
+
+    common:
+      path_prefix: /tmp/loki
+      storage:
+        filesystem:
+          chunks_directory: /tmp/loki/chunks
+          rules_directory: /tmp/loki/rules
+      replication_factor: 1
+      ring:
+        kvstore:
+          store: inmemory
+
+    schema_config:
+      configs:
+        - from: "2024-01-01"
+          store: tsdb
+          object_store: filesystem
+          schema: v13
+          index:
+            prefix: index_
+            period: 24h
+
+    limits_config:
+      allow_structured_metadata: false
+      reject_old_samples: true
+      reject_old_samples_max_age: 168h
+kind: ConfigMap
+metadata:
+  name: observability-loki-config
+  namespace: traderx
+---
+apiVersion: v1
+data:
+  config.yaml: |
+    extensions:
+      health_check:
+        endpoint: 0.0.0.0:13133
+
+    receivers:
+      otlp:
+        protocols:
+          grpc:
+            endpoint: 0.0.0.0:4317
+          http:
+            endpoint: 0.0.0.0:4318
+
+    processors:
+      batch:
+        timeout: 1s
+
+    exporters:
+      logging:
+        verbosity: normal
+      prometheus:
+        endpoint: 0.0.0.0:8889
+      otlp/tempo:
+        endpoint: tempo:4317
+        tls:
+          insecure: true
+
+    service:
+      extensions: [health_check]
+      pipelines:
+        traces:
+          receivers: [otlp]
+          processors: [batch]
+          exporters: [otlp/tempo, logging]
+        metrics:
+          receivers: [otlp]
+          processors: [batch]
+          exporters: [prometheus, logging]
+kind: ConfigMap
+metadata:
+  name: observability-otel-collector-config
+  namespace: traderx
+---
+apiVersion: v1
+data:
+  prometheus.yml: |
+    global:
+      scrape_interval: 15s
+      evaluation_interval: 15s
+
+    scrape_configs:
+      - job_name: prometheus
+        metrics_path: /prometheus/metrics
+        static_configs:
+          - targets: ["prometheus:9090"]
+
+      - job_name: otel-collector
+        static_configs:
+          - targets: ["otel-collector:8888", "otel-collector:8889", "otel-collector:13133"]
+
+      - job_name: blackbox-exporter
+        static_configs:
+          - targets: ["blackbox-exporter:9115"]
+
+      - job_name: traderx-spring-boot-actuator
+        metrics_path: /actuator/prometheus
+        static_configs:
+          - targets: ["account-service:18088", "position-service:18090", "trade-processor:18091", "trade-service:18092", "order-matcher:18110"]
+
+      - job_name: traderx-http-probe
+        metrics_path: /probe
+        params:
+          module: [http_2xx]
+        static_configs:
+          - targets:
+              - http://edge-proxy:8080/health
+              - http://edge-proxy:8080/
+              - http://reference-data:18085/stocks
+              - http://price-publisher:18100/health
+              - http://price-publisher:18100/prices/IBM
+              - http://account-service:18088/account/22214
+              - http://people-service:18089/swagger
+              - http://position-service:18090/health/alive
+              - http://trade-processor:18091/system/health
+              - http://trade-service:18092/v3/api-docs
+              - http://web-front-end-angular:18093/
+              - http://nats-broker:8222/varz
+              - http://order-matcher:18110/health
+              - http://order-matcher:18110/orders/open-count
+        relabel_configs:
+          - source_labels: [__address__]
+            target_label: __param_target
+          - source_labels: [__param_target]
+            target_label: instance
+          - target_label: __address__
+            replacement: blackbox-exporter:9115
+
+
+      - job_name: order-matcher
+        metrics_path: /metrics
+        static_configs:
+          - targets: ["order-matcher:18110"]
+kind: ConfigMap
+metadata:
+  name: observability-prometheus-config
+  namespace: traderx
+---
+apiVersion: v1
+data:
+  config.yaml: |
+    server:
+      http_listen_port: 3200
+
+    distributor:
+      receivers:
+        otlp:
+          protocols:
+            grpc:
+              endpoint: 0.0.0.0:4317
+            http:
+              endpoint: 0.0.0.0:4318
+
+    ingester:
+      max_block_duration: 5m
+
+    compactor:
+      compaction:
+        block_retention: 24h
+
+    storage:
+      trace:
+        backend: local
+        local:
+          path: /tmp/tempo/traces
+kind: ConfigMap
+metadata:
+  name: observability-tempo-config
+  namespace: traderx
+---
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    app: account-service
+  name: account-service
+  namespace: traderx
+spec:
+  ports:
+  - name: http
+    port: 18088
+    protocol: TCP
+    targetPort: 18088
+  selector:
+    app: account-service
+  type: ClusterIP
+---
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    app: api-explorer
+  name: api-explorer
+  namespace: traderx
+spec:
+  ports:
+  - name: http
+    port: 8080
+    protocol: TCP
+    targetPort: 80
+  selector:
+    app: api-explorer
+---
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    app: blackbox-exporter
+  name: blackbox-exporter
+  namespace: traderx
+spec:
+  ports:
+  - name: http
+    port: 9115
+    protocol: TCP
+    targetPort: 9115
+  selector:
+    app: blackbox-exporter
+  type: ClusterIP
+---
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    app: database
+  name: database
+  namespace: traderx
+spec:
+  ports:
+  - name: pg
+    port: 5432
+    protocol: TCP
+    targetPort: 5432
+  selector:
+    app: database
+  type: ClusterIP
+---
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    app: edge-proxy
+  name: edge-proxy
+  namespace: traderx
+spec:
+  ports:
+  - name: http
+    port: 8080
+    protocol: TCP
+    targetPort: 8080
+  selector:
+    app: edge-proxy
+  type: ClusterIP
+---
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    app: grafana
+  name: grafana
+  namespace: traderx
+spec:
+  ports:
+  - name: http
+    port: 3000
+    protocol: TCP
+    targetPort: 3000
+  selector:
+    app: grafana
+  type: ClusterIP
+---
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    app: loki
+  name: loki
+  namespace: traderx
+spec:
+  ports:
+  - name: http
+    port: 3100
+    protocol: TCP
+    targetPort: 3100
+  selector:
+    app: loki
+  type: ClusterIP
+---
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    app: nats-broker
+  name: nats-broker
+  namespace: traderx
+spec:
+  ports:
+  - name: client
+    port: 4222
+    protocol: TCP
+    targetPort: 4222
+  - name: monitor
+    port: 8222
+    protocol: TCP
+    targetPort: 8222
+  - name: ws
+    port: 8081
+    protocol: TCP
+    targetPort: 8081
+  selector:
+    app: nats-broker
+  type: ClusterIP
+---
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    app: order-matcher
+  name: order-matcher
+  namespace: traderx
+spec:
+  ports:
+  - name: http
+    port: 18110
+    protocol: TCP
+    targetPort: 18110
+  selector:
+    app: order-matcher
+  type: ClusterIP
+---
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    app: otel-collector
+  name: otel-collector
+  namespace: traderx
+spec:
+  ports:
+  - name: otlp-grpc
+    port: 4317
+    protocol: TCP
+    targetPort: 4317
+  - name: otlp-http
+    port: 4318
+    protocol: TCP
+    targetPort: 4318
+  - name: metrics
+    port: 8888
+    protocol: TCP
+    targetPort: 8888
+  - name: prometheus
+    port: 8889
+    protocol: TCP
+    targetPort: 8889
+  - name: health
+    port: 13133
+    protocol: TCP
+    targetPort: 13133
+  selector:
+    app: otel-collector
+  type: ClusterIP
+---
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    app: people-service
+  name: people-service
+  namespace: traderx
+spec:
+  ports:
+  - name: http
+    port: 18089
+    protocol: TCP
+    targetPort: 18089
+  selector:
+    app: people-service
+  type: ClusterIP
+---
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    app: position-service
+  name: position-service
+  namespace: traderx
+spec:
+  ports:
+  - name: http
+    port: 18090
+    protocol: TCP
+    targetPort: 18090
+  selector:
+    app: position-service
+  type: ClusterIP
+---
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    app: price-publisher
+  name: price-publisher
+  namespace: traderx
+spec:
+  ports:
+  - name: http
+    port: 18100
+    protocol: TCP
+    targetPort: 18100
+  selector:
+    app: price-publisher
+  type: ClusterIP
+---
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    app: prometheus
+  name: prometheus
+  namespace: traderx
+spec:
+  ports:
+  - name: http
+    port: 9090
+    protocol: TCP
+    targetPort: 9090
+  selector:
+    app: prometheus
+  type: ClusterIP
+---
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    app: reference-data
+  name: reference-data
+  namespace: traderx
+spec:
+  ports:
+  - name: http
+    port: 18085
+    protocol: TCP
+    targetPort: 18085
+  selector:
+    app: reference-data
+  type: ClusterIP
+---
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    app: tempo
+  name: tempo
+  namespace: traderx
+spec:
+  ports:
+  - name: http
+    port: 3200
+    protocol: TCP
+    targetPort: 3200
+  - name: otlp-grpc
+    port: 4317
+    protocol: TCP
+    targetPort: 4317
+  - name: otlp-http
+    port: 4318
+    protocol: TCP
+    targetPort: 4318
+  selector:
+    app: tempo
+  type: ClusterIP
+---
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    app: trade-processor
+  name: trade-processor
+  namespace: traderx
+spec:
+  ports:
+  - name: http
+    port: 18091
+    protocol: TCP
+    targetPort: 18091
+  selector:
+    app: trade-processor
+  type: ClusterIP
+---
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    app: trade-service
+  name: trade-service
+  namespace: traderx
+spec:
+  ports:
+  - name: http
+    port: 18092
+    protocol: TCP
+    targetPort: 18092
+  selector:
+    app: trade-service
+  type: ClusterIP
+---
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    app: web-front-end-angular
+  name: web-front-end-angular
+  namespace: traderx
+spec:
+  ports:
+  - name: http
+    port: 18093
+    protocol: TCP
+    targetPort: 18093
+  selector:
+    app: web-front-end-angular
+  type: ClusterIP
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app: account-service
+  name: account-service
+  namespace: traderx
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: account-service
+  template:
+    metadata:
+      labels:
+        app: account-service
+    spec:
+      containers:
+      - env:
+        - name: ACCOUNT_SERVICE_PORT
+          value: "18088"
+        - name: DATABASE_PG_HOST
+          value: database
+        - name: DATABASE_PG_PORT
+          value: "5432"
+        - name: DATABASE_NAME
+          value: traderx
+        - name: DATABASE_DBUSER
+          value: traderx
+        - name: DATABASE_DBPASS
+          value: traderx
+        - name: PEOPLE_SERVICE_HOST
+          value: people-service
+        - name: CORS_ALLOWED_ORIGINS
+          value: http://localhost:8080
+        - name: MANAGEMENT_ENDPOINTS_WEB_EXPOSURE_INCLUDE
+          value: health,prometheus,info
+        - name: MANAGEMENT_ENDPOINT_PROMETHEUS_ENABLED
+          value: "true"
+        - name: MANAGEMENT_METRICS_EXPORT_PROMETHEUS_ENABLED
+          value: "true"
+        image: ghcr.io/finos/traderx-c2/account-service@sha256:347538e6d222960364b69815c180005f89c5aef33600afe83b6efca2d3a9a1c6
+        imagePullPolicy: IfNotPresent
+        name: account-service
+        ports:
+        - containerPort: 18088
+          name: http
+          protocol: TCP
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app: api-explorer
+  name: api-explorer
+  namespace: traderx
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: api-explorer
+  template:
+    metadata:
+      labels:
+        app: api-explorer
+    spec:
+      containers:
+      - image: ghcr.io/finos/traderx-c3/api-explorer@sha256:2279be63fb753b84e591a527b5b9902e4ba35d8f97aa07ccbfa1f80ee707a93d
+        imagePullPolicy: IfNotPresent
+        name: api-explorer
+        ports:
+        - containerPort: 80
+          name: http
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app: blackbox-exporter
+  name: blackbox-exporter
+  namespace: traderx
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: blackbox-exporter
+  template:
+    metadata:
+      labels:
+        app: blackbox-exporter
+    spec:
+      containers:
+      - args:
+        - --config.file=/etc/blackbox_exporter/config.yml
+        image: prom/blackbox-exporter:v0.25.0
+        imagePullPolicy: IfNotPresent
+        name: blackbox-exporter
+        ports:
+        - containerPort: 9115
+          name: http
+          protocol: TCP
+        volumeMounts:
+        - mountPath: /etc/blackbox_exporter/config.yml
+          name: blackbox-config
+          subPath: blackbox.yml
+      volumes:
+      - configMap:
+          name: observability-blackbox-config
+        name: blackbox-config
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app: database
+  name: database
+  namespace: traderx
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: database
+  template:
+    metadata:
+      labels:
+        app: database
+    spec:
+      containers:
+      - env:
+        - name: POSTGRES_DB
+          value: traderx
+        - name: POSTGRES_USER
+          value: traderx
+        - name: POSTGRES_PASSWORD
+          value: traderx
+        image: postgres:16-alpine
+        imagePullPolicy: IfNotPresent
+        livenessProbe:
+          exec:
+            command:
+            - sh
+            - -c
+            - pg_isready -U traderx -d traderx
+          initialDelaySeconds: 10
+          periodSeconds: 10
+        name: database
+        ports:
+        - containerPort: 5432
+          name: pg
+          protocol: TCP
+        readinessProbe:
+          exec:
+            command:
+            - sh
+            - -c
+            - pg_isready -U traderx -d traderx
+          initialDelaySeconds: 5
+          periodSeconds: 5
+        volumeMounts:
+        - mountPath: /var/lib/postgresql/data
+          name: db-data
+        - mountPath: /docker-entrypoint-initdb.d/001-initialSchema.sql
+          name: database-init-sql
+          subPath: 001-initialSchema.sql
+      volumes:
+      - emptyDir: {}
+        name: db-data
+      - configMap:
+          name: database-init-sql
+        name: database-init-sql
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app: edge-proxy
+  name: edge-proxy
+  namespace: traderx
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: edge-proxy
+  template:
+    metadata:
+      labels:
+        app: edge-proxy
+    spec:
+      containers:
+      - image: nginx:1.27-alpine
+        imagePullPolicy: IfNotPresent
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 5
+          periodSeconds: 10
+        name: edge-proxy
+        ports:
+        - containerPort: 8080
+          name: http
+          protocol: TCP
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 2
+          periodSeconds: 5
+        volumeMounts:
+        - mountPath: /etc/nginx/conf.d/default.conf
+          name: edge-proxy-config
+          subPath: default.conf
+      volumes:
+      - configMap:
+          name: edge-proxy-config
+        name: edge-proxy-config
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app: grafana
+  name: grafana
+  namespace: traderx
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: grafana
+  template:
+    metadata:
+      labels:
+        app: grafana
+    spec:
+      containers:
+      - env:
+        - name: GF_SECURITY_ADMIN_USER
+          value: admin
+        - name: GF_SECURITY_ADMIN_PASSWORD
+          value: admin
+        - name: GF_USERS_ALLOW_SIGN_UP
+          value: "false"
+        - name: GF_AUTH_ANONYMOUS_ENABLED
+          value: "false"
+        - name: GF_SERVER_ROOT_URL
+          value: '%(protocol)s://%(domain)s/grafana/'
+        - name: GF_SERVER_SERVE_FROM_SUB_PATH
+          value: "true"
+        image: grafana/grafana:11.1.0
+        imagePullPolicy: IfNotPresent
+        livenessProbe:
+          httpGet:
+            path: /api/health
+            port: 3000
+          initialDelaySeconds: 10
+          periodSeconds: 10
+        name: grafana
+        ports:
+        - containerPort: 3000
+          name: http
+          protocol: TCP
+        readinessProbe:
+          httpGet:
+            path: /api/health
+            port: 3000
+          initialDelaySeconds: 5
+          periodSeconds: 5
+        volumeMounts:
+        - mountPath: /etc/grafana/provisioning/datasources/datasources.yaml
+          name: grafana-datasources
+          subPath: datasources.yaml
+        - mountPath: /etc/grafana/provisioning/dashboards/dashboards.yaml
+          name: grafana-dashboard-providers
+          subPath: dashboards.yaml
+        - mountPath: /var/lib/grafana/dashboards
+          name: grafana-dashboards
+      volumes:
+      - configMap:
+          name: observability-grafana-datasources
+        name: grafana-datasources
+      - configMap:
+          name: observability-grafana-dashboard-providers
+        name: grafana-dashboard-providers
+      - configMap:
+          name: observability-grafana-dashboards
+        name: grafana-dashboards
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app: loki
+  name: loki
+  namespace: traderx
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: loki
+  template:
+    metadata:
+      labels:
+        app: loki
+    spec:
+      containers:
+      - args:
+        - -config.file=/etc/loki/config.yaml
+        image: grafana/loki:2.9.8
+        imagePullPolicy: IfNotPresent
+        livenessProbe:
+          httpGet:
+            path: /ready
+            port: 3100
+          initialDelaySeconds: 10
+          periodSeconds: 10
+        name: loki
+        ports:
+        - containerPort: 3100
+          name: http
+          protocol: TCP
+        readinessProbe:
+          httpGet:
+            path: /ready
+            port: 3100
+          initialDelaySeconds: 5
+          periodSeconds: 5
+        volumeMounts:
+        - mountPath: /etc/loki/config.yaml
+          name: loki-config
+          subPath: config.yaml
+      volumes:
+      - configMap:
+          name: observability-loki-config
+        name: loki-config
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app: nats-broker
+  name: nats-broker
+  namespace: traderx
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: nats-broker
+  template:
+    metadata:
+      labels:
+        app: nats-broker
+    spec:
+      containers:
+      - args:
+        - -c
+        - /etc/nats/nats.conf
+        image: nats:2.14-alpine
+        imagePullPolicy: IfNotPresent
+        name: nats-broker
+        ports:
+        - containerPort: 4222
+          name: client
+          protocol: TCP
+        - containerPort: 8222
+          name: monitor
+          protocol: TCP
+        - containerPort: 8081
+          name: ws
+          protocol: TCP
+        volumeMounts:
+        - mountPath: /etc/nats/nats.conf
+          name: nats-config
+          subPath: nats.conf
+      volumes:
+      - configMap:
+          name: nats-config
+        name: nats-config
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app: order-matcher
+  name: order-matcher
+  namespace: traderx
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: order-matcher
+  template:
+    metadata:
+      labels:
+        app: order-matcher
+    spec:
+      containers:
+      - env:
+        - name: ORDER_MATCHER_PORT
+          value: "18110"
+        - name: DATABASE_PG_HOST
+          value: database
+        - name: DATABASE_PG_PORT
+          value: "5432"
+        - name: DATABASE_NAME
+          value: traderx
+        - name: DATABASE_DBUSER
+          value: traderx
+        - name: DATABASE_DBPASS
+          value: traderx
+        - name: NATS_BROKER_HOST
+          value: nats-broker
+        - name: CORS_ALLOWED_ORIGINS
+          value: http://localhost:8080
+        - name: PRICE_SERVICE_URL
+          value: http://price-publisher:18100
+        - name: TRADE_SERVICE_URL
+          value: http://trade-service:18092/trade/
+        - name: ORDER_MATCHER_TICK_MS
+          value: "1000"
+        - name: ORDER_FILL_FULL_THRESHOLD
+          value: "1000"
+        - name: MANAGEMENT_ENDPOINTS_WEB_EXPOSURE_INCLUDE
+          value: health,prometheus,info
+        - name: MANAGEMENT_ENDPOINT_PROMETHEUS_ENABLED
+          value: "true"
+        - name: MANAGEMENT_METRICS_EXPORT_PROMETHEUS_ENABLED
+          value: "true"
+        image: ghcr.io/finos/traderx-c2/order-matcher@sha256:d01c434ea7c9f58309a41ef3338147d6ebb5f2bb3106a68617394bc108cbecee
+        imagePullPolicy: IfNotPresent
+        name: order-matcher
+        ports:
+        - containerPort: 18110
+          name: http
+          protocol: TCP
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app: otel-collector
+  name: otel-collector
+  namespace: traderx
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: otel-collector
+  template:
+    metadata:
+      labels:
+        app: otel-collector
+    spec:
+      containers:
+      - args:
+        - --config=/etc/otelcol-contrib/config.yaml
+        image: otel/opentelemetry-collector-contrib:0.103.1
+        imagePullPolicy: IfNotPresent
+        livenessProbe:
+          httpGet:
+            path: /
+            port: 13133
+          initialDelaySeconds: 10
+          periodSeconds: 10
+        name: otel-collector
+        ports:
+        - containerPort: 4317
+          name: otlp-grpc
+          protocol: TCP
+        - containerPort: 4318
+          name: otlp-http
+          protocol: TCP
+        - containerPort: 8889
+          name: prometheus
+          protocol: TCP
+        - containerPort: 8888
+          name: metrics
+          protocol: TCP
+        - containerPort: 13133
+          name: health
+          protocol: TCP
+        readinessProbe:
+          httpGet:
+            path: /
+            port: 13133
+          initialDelaySeconds: 5
+          periodSeconds: 5
+        volumeMounts:
+        - mountPath: /etc/otelcol-contrib/config.yaml
+          name: otel-config
+          subPath: config.yaml
+      volumes:
+      - configMap:
+          name: observability-otel-collector-config
+        name: otel-config
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app: people-service
+  name: people-service
+  namespace: traderx
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: people-service
+  template:
+    metadata:
+      labels:
+        app: people-service
+    spec:
+      containers:
+      - env:
+        - name: PEOPLE_SERVICE_PORT
+          value: "18089"
+        - name: CORS_ALLOWED_ORIGINS
+          value: http://localhost:8080
+        image: ghcr.io/finos/traderx-c2/people-service@sha256:e4fc47b98dcdbfcabb20a02fb1e758b79d5d114a1d6588a714d469ebe727167a
+        imagePullPolicy: IfNotPresent
+        name: people-service
+        ports:
+        - containerPort: 18089
+          name: http
+          protocol: TCP
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app: position-service
+  name: position-service
+  namespace: traderx
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: position-service
+  template:
+    metadata:
+      labels:
+        app: position-service
+    spec:
+      containers:
+      - env:
+        - name: POSITION_SERVICE_PORT
+          value: "18090"
+        - name: DATABASE_PG_HOST
+          value: database
+        - name: DATABASE_PG_PORT
+          value: "5432"
+        - name: DATABASE_NAME
+          value: traderx
+        - name: DATABASE_DBUSER
+          value: traderx
+        - name: DATABASE_DBPASS
+          value: traderx
+        - name: CORS_ALLOWED_ORIGINS
+          value: http://localhost:8080
+        - name: MANAGEMENT_ENDPOINTS_WEB_EXPOSURE_INCLUDE
+          value: health,prometheus,info
+        - name: MANAGEMENT_ENDPOINT_PROMETHEUS_ENABLED
+          value: "true"
+        - name: MANAGEMENT_METRICS_EXPORT_PROMETHEUS_ENABLED
+          value: "true"
+        image: ghcr.io/finos/traderx-c2/position-service@sha256:070e17a1ed33522397515b57345082026735d75e637dee5f97b5afa49aa7e0a5
+        imagePullPolicy: IfNotPresent
+        name: position-service
+        ports:
+        - containerPort: 18090
+          name: http
+          protocol: TCP
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app: price-publisher
+  name: price-publisher
+  namespace: traderx
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: price-publisher
+  template:
+    metadata:
+      labels:
+        app: price-publisher
+    spec:
+      containers:
+      - env:
+        - name: PRICE_PUBLISHER_PORT
+          value: "18100"
+        - name: NATS_BROKER_HOST
+          value: nats-broker
+        - name: PRICE_BOOTSTRAP_MODE
+          value: snapshot
+        - name: PRICE_TICKERS
+          value: AAPL,MSFT,AMZN,GOOGL,META,NVDA,TSLA,IBM,BAC,C,JPM,GS,MS,UBS,DB,COF,DFS,FNMA,FIS,FNF
+        image: ghcr.io/finos/traderx-c2/price-publisher@sha256:7af027a17a4583c873413d8b094a719a31b759834841f4e99f35baa21f1752cf
+        imagePullPolicy: IfNotPresent
+        name: price-publisher
+        ports:
+        - containerPort: 18100
+          name: http
+          protocol: TCP
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app: prometheus
+  name: prometheus
+  namespace: traderx
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: prometheus
+  template:
+    metadata:
+      labels:
+        app: prometheus
+    spec:
+      containers:
+      - args:
+        - --config.file=/etc/prometheus/prometheus.yml
+        - --web.enable-lifecycle
+        - --web.route-prefix=/prometheus
+        - --web.external-url=/prometheus
+        image: prom/prometheus:v2.53.2
+        imagePullPolicy: IfNotPresent
+        livenessProbe:
+          httpGet:
+            path: /prometheus/-/healthy
+            port: 9090
+          initialDelaySeconds: 10
+          periodSeconds: 10
+        name: prometheus
+        ports:
+        - containerPort: 9090
+          name: http
+          protocol: TCP
+        readinessProbe:
+          httpGet:
+            path: /prometheus/-/ready
+            port: 9090
+          initialDelaySeconds: 5
+          periodSeconds: 5
+        volumeMounts:
+        - mountPath: /etc/prometheus/prometheus.yml
+          name: prometheus-config
+          subPath: prometheus.yml
+      volumes:
+      - configMap:
+          name: observability-prometheus-config
+        name: prometheus-config
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app: reference-data
+  name: reference-data
+  namespace: traderx
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: reference-data
+  template:
+    metadata:
+      labels:
+        app: reference-data
+    spec:
+      containers:
+      - env:
+        - name: REFERENCE_DATA_SERVICE_PORT
+          value: "18085"
+        - name: CORS_ALLOWED_ORIGINS
+          value: http://localhost:8080
+        - name: REFERENCE_DATA_SUPPORTED_TICKERS
+          value: AAPL,MSFT,AMZN,GOOGL,META,NVDA,TSLA,IBM,BAC,C,JPM,GS,MS,UBS,DB,COF,DFS,FNMA,FIS,FNF
+        image: ghcr.io/finos/traderx-c2/reference-data@sha256:e3f0f5e595c1adf7605457b847830606668456c1a814c9571c83f8d1a2dbbe29
+        imagePullPolicy: IfNotPresent
+        name: reference-data
+        ports:
+        - containerPort: 18085
+          name: http
+          protocol: TCP
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app: tempo
+  name: tempo
+  namespace: traderx
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: tempo
+  template:
+    metadata:
+      labels:
+        app: tempo
+    spec:
+      containers:
+      - args:
+        - -config.file=/etc/tempo/config.yaml
+        image: grafana/tempo:2.5.0
+        imagePullPolicy: IfNotPresent
+        name: tempo
+        ports:
+        - containerPort: 3200
+          name: http
+          protocol: TCP
+        - containerPort: 4317
+          name: otlp-grpc
+          protocol: TCP
+        - containerPort: 4318
+          name: otlp-http
+          protocol: TCP
+        volumeMounts:
+        - mountPath: /etc/tempo/config.yaml
+          name: tempo-config
+          subPath: config.yaml
+      volumes:
+      - configMap:
+          name: observability-tempo-config
+        name: tempo-config
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app: trade-processor
+  name: trade-processor
+  namespace: traderx
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: trade-processor
+  template:
+    metadata:
+      labels:
+        app: trade-processor
+    spec:
+      containers:
+      - env:
+        - name: TRADE_PROCESSOR_SERVICE_PORT
+          value: "18091"
+        - name: DATABASE_PG_HOST
+          value: database
+        - name: DATABASE_PG_PORT
+          value: "5432"
+        - name: DATABASE_NAME
+          value: traderx
+        - name: DATABASE_DBUSER
+          value: traderx
+        - name: DATABASE_DBPASS
+          value: traderx
+        - name: NATS_BROKER_HOST
+          value: nats-broker
+        - name: CORS_ALLOWED_ORIGINS
+          value: http://localhost:8080
+        - name: MANAGEMENT_ENDPOINTS_WEB_EXPOSURE_INCLUDE
+          value: health,prometheus,info
+        - name: MANAGEMENT_ENDPOINT_PROMETHEUS_ENABLED
+          value: "true"
+        - name: MANAGEMENT_METRICS_EXPORT_PROMETHEUS_ENABLED
+          value: "true"
+        image: ghcr.io/finos/traderx-c2/trade-processor@sha256:4ccdd625908e8b7ceecd29ad1e0a86340709ff39f90e431629faa496b2fcadca
+        imagePullPolicy: IfNotPresent
+        name: trade-processor
+        ports:
+        - containerPort: 18091
+          name: http
+          protocol: TCP
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app: trade-service
+  name: trade-service
+  namespace: traderx
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: trade-service
+  template:
+    metadata:
+      labels:
+        app: trade-service
+    spec:
+      containers:
+      - env:
+        - name: TRADING_SERVICE_PORT
+          value: "18092"
+        - name: ACCOUNT_SERVICE_HOST
+          value: account-service
+        - name: REFERENCE_DATA_HOST
+          value: reference-data
+        - name: PEOPLE_SERVICE_HOST
+          value: people-service
+        - name: NATS_BROKER_HOST
+          value: nats-broker
+        - name: PRICE_SERVICE_HOST
+          value: price-publisher
+        - name: CORS_ALLOWED_ORIGINS
+          value: http://localhost:8080
+        - name: MANAGEMENT_ENDPOINTS_WEB_EXPOSURE_INCLUDE
+          value: health,prometheus,info
+        - name: MANAGEMENT_ENDPOINT_PROMETHEUS_ENABLED
+          value: "true"
+        - name: MANAGEMENT_METRICS_EXPORT_PROMETHEUS_ENABLED
+          value: "true"
+        image: ghcr.io/finos/traderx-c2/trade-service@sha256:493a62742fc687b5e50dfc323c91930736c4044587c55425aec7396fa4ba0612
+        imagePullPolicy: IfNotPresent
+        name: trade-service
+        ports:
+        - containerPort: 18092
+          name: http
+          protocol: TCP
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app: web-front-end-angular
+  name: web-front-end-angular
+  namespace: traderx
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: web-front-end-angular
+  template:
+    metadata:
+      labels:
+        app: web-front-end-angular
+    spec:
+      containers:
+      - env:
+        - name: WEB_SERVICE_PORT
+          value: "18093"
+        image: ghcr.io/finos/traderx-c2/web-front-end-angular@sha256:5603572275471ca2058e988323eaba1490ff381474a730ad457c2377583146b6
+        imagePullPolicy: IfNotPresent
+        name: web-front-end-angular
+        ports:
+        - containerPort: 18093
+          name: http
+          protocol: TCP
