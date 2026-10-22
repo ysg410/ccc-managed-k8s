@@ -22,6 +22,10 @@ The blueprints are executable reference implementations for [Common Cloud Contro
 
 Each blueprint is a standard Terraform module. Callers supply a small configuration covering the cluster name, region, networking, node-pool sizing, and identity bindings, then run the blueprint with `terraform plan` and `terraform apply` or from their own CI/CD pipeline.
 
+## Workshop
+
+[`workshop/aks/`](workshop/aks) builds a private, CCC-hardened AKS cluster from the [Azure Verified Module for AKS](https://github.com/Azure/terraform-azurerm-avm-res-containerservice-managedcluster) and deploys the [TraderX demo](examples/traderx/traderx-aks-demo.yaml) on it. Every setup step, from subscription preflight to teardown, runs from that directory; see its [README](workshop/aks/README.md).
+
 ## Usage example
 
 ```hcl
