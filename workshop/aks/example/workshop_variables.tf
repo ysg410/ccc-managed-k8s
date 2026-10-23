@@ -24,6 +24,13 @@ variable "workshop_node_max_count" {
   nullable    = false
 }
 
+variable "workshop_node_max_pods" {
+  type        = number
+  default     = 30
+  description = "Maximum pods per node of the default node pool. Fixed when the pool is created."
+  nullable    = false
+}
+
 variable "workshop_node_zones" {
   type        = list(string)
   default     = ["1", "2", "3"]
@@ -62,6 +69,12 @@ variable "workshop_monitoring_enabled" {
   default     = true
   description = "Container Insights and AKS diagnostic logs to Log Analytics (billed per GB ingested). The workspace is created either way."
   nullable    = false
+}
+
+variable "workshop_app_dns_zone_id" {
+  type        = string
+  default     = null
+  description = "Landing-zone private DNS zone that external-dns manages. When set, workshop_external_dns.tf creates the external-dns workload identity and its grants."
 }
 
 variable "workshop_container_registry_sku" {

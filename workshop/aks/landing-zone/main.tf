@@ -13,7 +13,6 @@ locals {
   fw_cidr      = "10.10.0.0/26"
   fw_mgmt_cidr = "10.10.0.64/26"
   jumpbox_cidr = "10.10.1.0/27"
-  pe_cidr      = "10.10.2.0/27"
   spoke_cidr   = "10.20.0.0/16"
   nodes_cidr   = "10.20.0.0/24"
   api_cidr     = "10.20.1.0/28"
@@ -40,16 +39,8 @@ resource "azuread_group" "aks_admins" {
   members          = [data.azurerm_client_config.current.object_id]
 }
 
-# Owner does not include Key Vault data actions. The example creates keys in a
-# new vault, so the deployer needs this grant inherited from the resource group.
-resource "azurerm_role_assignment" "deployer_kv_crypto_officer" {
-  scope                = azurerm_resource_group.this.id
-  role_definition_name = "Key Vault Crypto Officer"
-  principal_id         = data.azurerm_client_config.current.object_id
-}
-
 # ---------------------------------------------------------------------------
-# Hub VNet: firewall, jumpbox (Terraform runner), runner vault private endpoint
+# Hub VNet: firewall and jumpbox (Terraform runner with access to the private API)
 # ---------------------------------------------------------------------------
 
 resource "azurerm_virtual_network" "hub" {
@@ -79,14 +70,6 @@ resource "azurerm_subnet" "jumpbox" {
   resource_group_name  = azurerm_resource_group.this.name
   virtual_network_name = azurerm_virtual_network.hub.name
   address_prefixes     = [local.jumpbox_cidr]
-}
-
-resource "azurerm_subnet" "private_endpoints" {
-  name                            = "snet-private-endpoints"
-  resource_group_name             = azurerm_resource_group.this.name
-  virtual_network_name            = azurerm_virtual_network.hub.name
-  address_prefixes                = [local.pe_cidr]
-  default_outbound_access_enabled = false
 }
 
 # ---------------------------------------------------------------------------
@@ -133,6 +116,29 @@ resource "azurerm_subnet" "acr_private_endpoint" {
   virtual_network_name            = azurerm_virtual_network.spoke.name
   address_prefixes                = [local.acr_pe_cidr]
   default_outbound_access_enabled = false
+}
+
+# Private DNS zone for workload hostnames (TraderX). external-dns, installed by
+# 15-install-cluster-addons.sh, writes the records. Linked to the spoke so the
+# cluster resolves them and to the hub so the jumpbox does.
+resource "azurerm_private_dns_zone" "apps" {
+  name                = var.app_dns_zone_name
+  resource_group_name = azurerm_resource_group.this.name
+  tags                = var.tags
+}
+
+resource "azurerm_private_dns_zone_virtual_network_link" "apps" {
+  for_each = {
+    hub   = azurerm_virtual_network.hub.id
+    spoke = azurerm_virtual_network.spoke.id
+  }
+
+  name                  = "${each.key}-vnet"
+  resource_group_name   = azurerm_resource_group.this.name
+  private_dns_zone_name = azurerm_private_dns_zone.apps.name
+  virtual_network_id    = each.value
+  registration_enabled  = false
+  tags                  = var.tags
 }
 
 resource "azurerm_virtual_network_peering" "hub_to_spoke" {
@@ -350,24 +356,30 @@ locals {
     subnet_id                                     = azurerm_subnet.nodes.id
     api_server_subnet_id                          = azurerm_subnet.api_server.id
     container_registry_private_endpoint_subnet_id = azurerm_subnet.acr_private_endpoint.id
-    key_vault_private_endpoint_subnet_id          = azurerm_subnet.private_endpoints.id
-    key_vault_private_dns_zone_id                 = null
-    key_vault_dns_virtual_network_links           = { "hub-vnet" = azurerm_virtual_network.hub.id }
-    outbound_type                                 = var.egress_firewall ? "userDefinedRouting" : "loadBalancer"
-    service_cidr                                  = local.service_cidr
-    dns_service_ip                                = local.dns_ip
-    tags                                          = var.tags
+    # AKS runs the cluster on its newer KMS experience (PMK) at the latest Kubernetes
+    # versions, which rejects a versioned key URL.
+    kms_key_versionless = true
+    # AVM telemetry records the apply time on every run; off so the idempotency
+    # check in 10-run-example.sh covers only real resources (as the example documents).
+    enable_telemetry = false
+    outbound_type    = var.egress_firewall ? "userDefinedRouting" : "loadBalancer"
+    service_cidr     = local.service_cidr
+    dns_service_ip   = local.dns_ip
+    tags             = var.tags
 
     # Declared by ../example/workshop_variables.tf in the jumpbox's clone.
     workshop_node_vm_size           = var.aks_node_vm_size
     workshop_node_count             = var.aks_node_count
     workshop_node_max_count         = var.aks_node_max_count
+    workshop_node_max_pods          = var.aks_node_max_pods
     workshop_node_zones             = var.aks_node_zones
     workshop_aks_sku_tier           = var.aks_sku_tier
     workshop_azure_policy_enabled   = var.aks_azure_policy_enabled
     workshop_defender_enabled       = var.aks_defender_enabled
     workshop_monitoring_enabled     = var.aks_monitoring_enabled
     workshop_container_registry_sku = var.aks_container_registry_sku
+    # Declared by ../example/workshop_variables.tf; used by workshop_external_dns.tf.
+    workshop_app_dns_zone_id = azurerm_private_dns_zone.apps.id
   }
 
   example_tfvars_json = jsonencode(local.example_tfvars)

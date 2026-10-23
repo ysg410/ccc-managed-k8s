@@ -7,3 +7,4 @@ landing-zone/generated/
 # The landing zone is a root configuration: keep its provider lock file
 # (the repository root ignores lock files for the reusable aks/ module).
 !landing-zone/.terraform.lock.hcl
+ccc-results/

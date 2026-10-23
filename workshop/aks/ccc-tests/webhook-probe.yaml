@@ -1,0 +1,150 @@
+# CN11.AR03 admission-webhook probe, ported from upstream common-cloud-controls
+# modules/cloud-api-test/terraform/azure/modules/admission-webhook-probe.
+# 40-setup-ccc-tests.sh builds the probe image (modules/probes/admission-webhook)
+# with ko, pushes it to the workshop registry, creates the TLS secret and
+# replaces __PROBE_IMAGE__ and __CA_BUNDLE__ before applying this file.
+# The webhook only sees Pods labelled ccc.finos.org/webhook-probe-object=true in
+# namespaces labelled ccc.finos.org/webhook-probe=true, so failurePolicy: Fail
+# cannot affect anything else in the cluster.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ccc-admission-webhook-probe
+  labels:
+    environment: test
+    owner: ccc-workshop
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ccc-admission-webhook-test
+  labels:
+    ccc.finos.org/webhook-probe: "true"
+    environment: test
+    owner: ccc-workshop
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: ccc-admission-webhook-probe
+  namespace: ccc-admission-webhook-probe
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ccc-admission-webhook-probe
+  namespace: ccc-admission-webhook-probe
+  labels:
+    app.kubernetes.io/name: ccc-admission-webhook-probe
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: ccc-admission-webhook-probe
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: ccc-admission-webhook-probe
+    spec:
+      serviceAccountName: ccc-admission-webhook-probe
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: webhook
+          image: __PROBE_IMAGE__
+          ports:
+            - { containerPort: 8443, name: https }
+          readinessProbe:
+            httpGet: { path: /readyz, port: 8443, scheme: HTTPS }
+            initialDelaySeconds: 2
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: { path: /healthz, port: 8443, scheme: HTTPS }
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            requests: { cpu: 10m, memory: 16Mi }
+            limits: { cpu: 100m, memory: 64Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+          volumeMounts:
+            - { name: tls, mountPath: /tls, readOnly: true }
+      volumes:
+        - name: tls
+          secret:
+            secretName: ccc-admission-webhook-probe-tls
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ccc-admission-webhook-probe
+  namespace: ccc-admission-webhook-probe
+spec:
+  selector:
+    app.kubernetes.io/name: ccc-admission-webhook-probe
+  ports:
+    - { name: https, port: 443, targetPort: 8443, protocol: TCP }
+---
+# Lets the probe's own service account scale only this Deployment (upstream parity).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: ccc-admission-webhook-controller
+  namespace: ccc-admission-webhook-probe
+rules:
+  - apiGroups: ["apps"]
+    resources: ["deployments", "deployments/scale"]
+    verbs: ["get", "list", "watch", "patch", "update"]
+  - apiGroups: [""]
+    resources: ["pods", "endpoints"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["discovery.k8s.io"]
+    resources: ["endpointslices"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: ccc-admission-webhook-controller
+  namespace: ccc-admission-webhook-probe
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: ccc-admission-webhook-controller
+subjects:
+  - kind: ServiceAccount
+    name: ccc-admission-webhook-probe
+    namespace: ccc-admission-webhook-probe
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingWebhookConfiguration
+metadata:
+  name: ccc-admission-webhook-probe
+webhooks:
+  - name: ccc-admission-webhook-probe.finos.org
+    admissionReviewVersions: ["v1"]
+    sideEffects: None
+    timeoutSeconds: 5
+    failurePolicy: Fail
+    clientConfig:
+      service:
+        name: ccc-admission-webhook-probe
+        namespace: ccc-admission-webhook-probe
+        path: /validate
+        port: 443
+      caBundle: __CA_BUNDLE__
+    rules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["pods"]
+        scope: Namespaced
+    namespaceSelector:
+      matchLabels:
+        ccc.finos.org/webhook-probe: "true"
+    objectSelector:
+      matchLabels:
+        ccc.finos.org/webhook-probe-object: "true"

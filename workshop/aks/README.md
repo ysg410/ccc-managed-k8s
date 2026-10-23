@@ -8,8 +8,9 @@ example, currently taken from the PR #333 branch
 (`example_repo_url` / `example_repo_branch` in the landing zone).
 
 The landing zone here builds everything that example expects to already exist
-on a fresh Azure subscription, plus a jumpbox inside the network. The example
-runs from the jumpbox because its Key Vault and API server are private.
+on a fresh Azure subscription, plus a jumpbox inside the network. Everything
+runs from the jumpbox because the API server is private: `kubectl`, TraderX and
+the CCC tests need it, and it keeps the example's Terraform state in one place.
 
 Run every laptop command from this directory (`workshop/aks`). Scripts in
 [`scripts/`](scripts) are numbered in the order you run them; the ones marked
@@ -20,25 +21,29 @@ Run every laptop command from this directory (`workshop/aks`). Scripts in
 | 1. Preflight | laptop | `./scripts/00-preflight.sh` |
 | 2. Landing zone | laptop | `cd landing-zone && terraform init && terraform apply` |
 | 3. Sync files (only when the jumpbox already existed) | laptop | `./scripts/05-sync-jumpbox.sh` |
-| 4. Build the cluster | jumpbox | `/opt/aks-ccc/10-run-example.sh` |
+| 4. Build the cluster, install Kyverno and external-dns | jumpbox | `/opt/aks-ccc/10-run-example.sh` (reinstall add-ons only: `/opt/aks-ccc/15-install-cluster-addons.sh`) |
 | 5. Verify and get kubectl access | jumpbox | `/opt/aks-ccc/20-verify-cluster.sh` |
-| 6. Deploy TraderX | jumpbox | `/opt/aks-ccc/30-deploy-traderx.sh` |
-| 7. Tear down | jumpbox, then laptop | `/opt/aks-ccc/90-destroy-example.sh`, then `terraform destroy` |
+| 6. Deploy 4 TraderX instances (`traderx-1..4`), each on a load balancer with a private DNS name | jumpbox | `/opt/aks-ccc/30-deploy-traderx.sh` |
+| 7. Set up CCC behavioural tests | jumpbox | `/opt/aks-ccc/40-setup-ccc-tests.sh` |
+| 8. Run them, get the dashboard | laptop | `./scripts/55-run-ccc-tests-from-laptop.sh` (or `/opt/aks-ccc/50-run-ccc-tests.sh` on the jumpbox) |
+| 9. Tear down | jumpbox, then laptop | `/opt/aks-ccc/95-destroy-ccc-tests.sh`, `/opt/aks-ccc/90-destroy-example.sh`, then `terraform destroy` |
 
 ```
 vnet-hub 10.10.0.0/16                          vnet-spoke 10.20.0.0/16
   AzureFirewallSubnet           10.10.0.0/26     snet-aks-nodes      10.20.0.0/24  (UDR -> firewall if egress_firewall)
   AzureFirewallManagementSubnet 10.10.0.64/26    snet-aks-apiserver  10.20.1.0/28  (delegated to AKS)
   snet-jumpbox                  10.10.1.0/27     snet-aks-endpoints  10.20.2.0/27  (registry private endpoint)
-  snet-private-endpoints        10.10.2.0/27   <-- peered -->
+                                               <-- peered -->
 service CIDR 10.100.0.0/16, DNS 10.100.0.10, pod CIDR 172.18.0.0/16 (fixed by the example)
+private DNS zone workshop.ccc.internal, linked to both VNets (records written by external-dns)
 ```
 
-The landing zone creates: resource group, Entra admin group (you as member),
-**Key Vault Crypto Officer** for you on the resource group, hub/spoke VNets and
-peering and an Ubuntu jumpbox (SSH only from your IP) with az, terraform, kubectl,
-kubelogin, the AVM example branch cloned, `terraform.tfvars.json` pre-filled and
-the TraderX manifest.
+The landing zone creates: resource group, Entra admin group (you as member; it
+is the cluster's break-glass admin group, which is how you get `kubectl` access),
+hub/spoke VNets and peering, the private DNS zone for workload hostnames
+(`app_dns_zone_name`, default `workshop.ccc.internal`) and an Ubuntu jumpbox
+(SSH only from your IP) with az, terraform, kubectl, kubelogin, helm, the AVM
+example branch cloned, `terraform.tfvars.json` pre-filled and the TraderX manifest.
 
 ## Workshop settings (low cost)
 
@@ -50,6 +55,7 @@ personal `terraform.tfvars`, so edit it to change them:
 | --- | --- | --- |
 | `egress_firewall` | `false`: AKS egresses through its own load balancer (`outboundType = loadBalancer`) | Firewall Basic with `userDefinedRouting`, ~$0.40/hour |
 | `aks_node_vm_size`, `aks_node_count`, `aks_node_max_count`, `aks_node_zones` | 2 × `Standard_D4s_v5` in zone 1, autoscaler pinned at 2 | 2–5 × `Standard_D4s_v5` in zones 1–3 |
+| `aks_node_max_pods` | `120` per node, so four TraderX instances (19 pods each) fit; fixed when the cluster is created | `30` |
 | `aks_sku_tier` | `Free` | `Standard` (uptime SLA), ~$0.10/hour |
 | `aks_azure_policy_enabled` | `false`, so TraderX's public images run | Azure Policy add-on with deny-mode assignments |
 | `aks_defender_enabled` | `false` | Defender for Containers, billed per vCPU |
@@ -124,8 +130,45 @@ cloud-init status --wait          # bootstrap takes ~5 min after the VM is up
 ```
 
 The script logs you in with a device code, runs `init`/`validate`, deploys
-in two stages (see below), asks before applying the full plan, then runs
-`terraform plan -detailed-exitcode` and prints IDEMPOTENT or DRIFT.
+in two stages (see below), asks before applying the full plan (about 42
+resources), then runs `terraform plan -detailed-exitcode` and prints IDEMPOTENT
+or DRIFT. AVM telemetry is off (`enable_telemetry = false` in the generated
+inputs), so IDEMPOTENT is expected.
+
+Most of the time is AKS: ~5 minutes to create the cluster with the workshop
+settings, then ~15–20 minutes while the module's node-pool update replaces the
+nodes one at a time. With the example's own settings (Azure Policy, Defender,
+Container Insights) the cluster create alone takes ~25 minutes.
+
+**Add-on check (CCC.K8S.CN08.AR01).** After the cluster is created, the example
+reads it back and fails the apply with `CCC.K8S.CN08.AR01: the cluster has
+add-ons or managed features enabled that are not in var.approved_addons: ...`
+if AKS enabled anything outside the example's allowlist. The cluster is left in
+place. That is a finding against the example, not the workshop: report the
+name it lists.
+
+**Cluster add-ons (workshop only, not part of the example).** After the
+apply, the script links the API server's private DNS zone to the hub VNet and
+runs `15-install-cluster-addons.sh`, which installs with Helm:
+
+- **Kyverno**, latest chart, namespace `kyverno`, with no policies yet.
+- **external-dns**, latest chart, namespace `external-dns`, provider
+  `azure-private-dns`, sources `service`, policy `sync`, limited to
+  `workshop.ccc.internal`. It signs in with a workload identity that
+  [`example/workshop_external_dns.tf`](example/workshop_external_dns.tf) adds
+  to the example's state. That identity has Private DNS Zone Contributor on the
+  zone and Reader on the resource group, which is the minimum external-dns
+  documents. It publishes Services annotated with
+  `external-dns.alpha.kubernetes.io/hostname`.
+
+Pin versions with `KYVERNO_CHART_VERSION` / `EXTERNAL_DNS_CHART_VERSION`. The
+images come from public registries, which works because Azure Policy is off.
+With `aks_azure_policy_enabled = true`, import them into the private registry
+first.
+
+**Security alerts.** The example creates an action group that emails the
+subscription's Owners. Expect alert emails when the cluster, role assignments or
+network rules change, including during the CCC tests.
 
 **Route table grant (only with `egress_firewall = true`).** The example gives
 the new control-plane identity Network Contributor on the node and API-server
@@ -146,7 +189,7 @@ If that fails with an authorization error on `routeTables`, the PR needs a fix.
 /opt/aks-ccc/20-verify-cluster.sh
 ```
 
-Links the cluster's private API DNS zone to the hub VNet, prints the security
+Checks the jumpbox resolves the private API server, prints the security
 settings from `az aks show`, logs in with Entra via kubelogin, lists nodes and
 pods, creates and reads a test secret (KMS) and confirms nodes have no public IPs.
 
@@ -156,22 +199,157 @@ pods, creates and reads a test secret (KMS) and confirms nodes have no public IP
 /opt/aks-ccc/30-deploy-traderx.sh
 ```
 
-Applies `/opt/aks-ccc/traderx.yaml` and waits for every deployment in the
-`traderx` namespace. That file is this repository's
+Deploys `traderx_instances` (default 4) independent copies of TraderX, one per
+namespace: `traderx-1` … `traderx-4`. Each copy is
+`/opt/aks-ccc/traderx.yaml` with only the namespace changed. That works because
+the services address each other by short name, so every instance has its own
+database, message bus and observability stack. The manifest is this
+repository's
 [`examples/traderx/traderx-aks-demo.yaml`](../../examples/traderx/traderx-aks-demo.yaml),
 delivered by the landing zone (set `traderx_manifest_path` to use another
 manifest). After editing it, run `terraform apply` and
-`./scripts/05-sync-jumpbox.sh` again. The script prints the port-forward
-commands to open the UI from your laptop.
+`./scripts/05-sync-jumpbox.sh` again.
+
+Each instance's entry point (`edge-proxy`) is exposed as an `edge-proxy-public`
+Service of type LoadBalancer:
+
+- **Public IP on port 80**, open only to your IP (`admin_ssh_source_cidr`) and the
+  jumpbox's public IP, through `loadBalancerSourceRanges`.
+- **DNS name:** external-dns publishes `traderx-N.workshop.ccc.internal` as an A
+  record for that IP.
+
+The script waits for every instance, IP and record, then prints a table and
+`kubectl top nodes`.
+
+- **From the jumpbox:** `curl -sI http://traderx-1.workshop.ccc.internal/`.
+- **From your laptop:** open `http://<lb-ip>/`. The private zone doesn't resolve
+  outside the VNets, so to use the names, add `<lb-ip> traderx-N.workshop.ccc.internal`
+  lines to `/etc/hosts`.
+- **Instance count:** change it for one run with `TRADERX_INSTANCES=2 /opt/aks-ccc/30-deploy-traderx.sh`,
+  or permanently with `traderx_instances` in the landing zone, followed by
+  `terraform apply` and `05-sync-jumpbox.sh`.
+- **Lowering the count** doesn't delete instances. Remove one with
+  `kubectl delete namespace traderx-<n>`; external-dns then removes its record.
+
+**Capacity.** Each instance runs 19 pods, so four need 76 pod slots on top of
+the AKS system pods, Kyverno and external-dns. With the example's 30 pods per
+node, the third instance stays `Pending` (`Too many pods`). The workshop
+therefore builds the cluster with `aks_node_max_pods = 120`, which gives 240
+slots on two nodes. AKS fixes this value when the node pool is created:
+`10-run-example.sh` stops and asks you to rebuild an existing cluster that has
+a different value (`90-destroy-example.sh`, then `10-run-example.sh`).
+
+TraderX also sets no CPU or memory requests. The scheduler therefore places
+every instance without checking capacity, and the cluster autoscaler never adds
+a node. Four instances share the two `Standard_D4s_v5` nodes (8 vCPU, 32 GiB).
+If `kubectl top nodes` shows memory near the limit, or pods restart with
+`OOMKilled`, run fewer instances, or raise `aks_node_count` and
+`aks_node_max_count` in `workshop.auto.tfvars.json`. The 16-vCPU DSv5 quota
+allows up to 4 nodes.
 
 This needs `aks_azure_policy_enabled = false` (the workshop value). With it
 enabled the example assigns deny-mode Azure Policy: images only from its private registry pinned by
 `@sha256` digest, the restricted pod security standard and CPU/memory limits of
 at most 1000m/2Gi per container, which the TraderX manifest does not meet.
 
-## 5. Tear down (stop the costs)
+## 5. CCC behavioural tests and compliance dashboard
+
+These tests check the cluster against the FINOS Common Cloud Controls
+(CCC.K8S, plus the CCC.Core requirements that apply to Kubernetes). They use
+[common-cloud-controls](https://github.com/finos/common-cloud-controls), branch
+`managed-k8s-behavioural`: Privateer (`pvtr`) runs `ccc-behavioural-plugin`,
+which runs the Gherkin scenarios in `modules/features/kubernetes`.
+
+```
+laptop                                   jumpbox (hub VNet)                         AKS (private API)
+55-run-ccc-tests-from-laptop.sh ──ssh──> 50-run-ccc-tests.sh
+  reachability observer <── reverse ───   run-compliance-tests.sh -> pvtr -> plugin ──> ARM + private API
+  (untrusted vantage for CN01)  tunnel                                              fixtures in ccc-test, ...
+  ccc-results/<time>/dashboard.html <──── ~/ccc-tests/results/<time>/
+```
+
+The run happens on the jumpbox because the API server is private and the
+example disables AKS Run Command, which the plugin's other access mode
+(`command-invoke`) needs. The config uses `azure-aks-kube-transport: direct`.
+
+### Set up (jumpbox, once, ~15–20 min)
+
+After `20-verify-cluster.sh` (it links the API DNS zone to the hub VNet):
 
 ```bash
+/opt/aks-ccc/40-setup-ccc-tests.sh
+```
+
+It installs Go, Node.js 22, `pvtr` and `ko`, clones common-cloud-controls,
+generates its DEV catalogs, and creates the fixtures the scenarios expect
+(ported from the upstream CI fixtures):
+
+| Fixture | Where | Used by |
+| --- | --- | --- |
+| Entra service principal with no role assignments (`test-user-no-access`) | Entra ID | CCC.Core.CN05.AR06, CCC.K8S.CN15.AR02 |
+| Managed identity federated to `ccc-test/ccc-wi-sa`, Blob Data Reader on a small storage account holding `probe/probe.txt` | resource group | CCC.K8S.CN03.AR01 |
+| Namespaces `ccc-test` (Pod Security restricted, default-deny network policies, LimitRange, quota) and `ccc-network-control`, listeners, secrets, storage classes, ValidatingAdmissionPolicies scoped to `ccc-test` | cluster ([`ccc-tests/k8s-fixtures.yaml`](ccc-tests/k8s-fixtures.yaml)) | CN03–CN07, CN10, CN13 |
+| Admission webhook probe with `failurePolicy: Fail`, only for labelled Pods in `ccc-admission-webhook-test`; image built with `ko` and pushed to the workshop registry | cluster ([`ccc-tests/webhook-probe.yaml`](ccc-tests/webhook-probe.yaml)) | CCC.K8S.CN11.AR03 |
+
+The service principal's secret is kept only in `~/ccc-tests/ccc-test-env.sh`
+(mode 0600) on the jumpbox. The extra cost is pennies (one storage account, a
+1 GiB test disk created and deleted during the run).
+
+### Run (laptop, ~20–40 min; the first run adds 15–30 min of Go compilation)
+
+The first run compiles the CCC Go modules on the jumpbox. On the 4 GB
+`Standard_B2als_v2` it swaps and prints nothing for long stretches; that is
+not a hang (check with `top` on the jumpbox). Later runs reuse the build cache.
+
+```bash
+./scripts/55-run-ccc-tests-from-laptop.sh
+```
+
+It builds the CCC reachability observer for your laptop on the jumpbox, starts
+it on `127.0.0.1:18080` and runs `/opt/aks-ccc/50-run-ccc-tests.sh` over SSH
+with a reverse tunnel, so CCC.K8S.CN01 ("API not reachable from an untrusted
+network") is probed from your laptop rather than from the jumpbox, which is
+inside the approved network. Results land in `ccc-results/<UTC time>/`
+(gitignored) and the dashboard opens.
+
+You can also run `/opt/aks-ccc/50-run-ccc-tests.sh` directly on the jumpbox;
+CN01 is then probed from the jumpbox and the dashboard flags it. Options:
+`CCC_TAGS='@CCC.K8S.CN06'` (run a subset), `CCC_DEBUG=1` (run the plugin
+in-process without `pvtr`, as upstream CI does), `CCC_TIMEOUT=90m`.
+
+Each run directory contains:
+
+- `dashboard.html`: one page with compliance percentage, pass/fail per
+  catalog, every control and assessment requirement with its scenarios and the
+  first failing step, workshop notes for failures explained by the low-cost
+  settings, and the CCC.K8S requirements that have no behavioural test;
+- `html/` (the runner's detailed report and `summary.html`), `ocsf/`
+  (OCSF findings), Privateer's evaluation YAML, `privateer-config.yml` (no
+  secrets) and `run.log`.
+
+### What to expect with the workshop settings
+
+These come from the low-cost settings, not from the AVM example:
+
+- **CCC.Core.CN04, CCC.K8S.CN14 (audit logging) fail**:
+  `aks_monitoring_enabled = false` sends no audit logs to Log Analytics. To
+  test them, set it to `true`, apply the landing zone and the example, wait
+  ~15 minutes and rerun (Log Analytics ingestion is billed per GB).
+- **CCC.K8S.CN11.AR01 fails** while any namespace (`default`, `traderx-1`, ...)
+  has no `pod-security.kubernetes.io/enforce` label; the Azure Policy add-on
+  is off.
+- The test namespace has its own guardrails (above), so admission scenarios
+  check that guardrail pattern, not cluster-wide policy.
+
+The tests are from a work-in-progress upstream branch, so some failures can be
+in the scenarios themselves; the dashboard shows the failing step and error so
+you can tell. CN04/CN14 also add the tag `ccc_compliance_test` to the cluster;
+the example's next `terraform plan` removes it (expected drift).
+
+## 6. Tear down (stop the costs)
+
+```bash
+/opt/aks-ccc/95-destroy-ccc-tests.sh      # on the jumpbox, if you set up the CCC tests
 /opt/aks-ccc/90-destroy-example.sh        # on the jumpbox
 cd landing-zone && terraform destroy      # on the laptop
 ```
@@ -182,8 +360,8 @@ nothing, and their names include a random suffix, so redeploying does not clash.
 ## Cost (rough, check the pricing calculator)
 
 With the workshop settings: 2 × D4s_v5 nodes (~$0.40/hour) and their OS disks,
-B2als_v2 jumpbox (~$0.03/hour), the cluster load balancer and public IP (a few
-cents/hour), a Basic registry (~$0.01/hour) and Key Vault keys (pennies) ≈
+B2als_v2 jumpbox (~$0.03/hour), the cluster load balancer and public IPs (one per TraderX instance,
+a few cents/hour each), the private DNS zone (~$0.50/month), a Basic registry (~$0.01/hour) and Key Vault keys (pennies) ≈
 $0.45–0.50/hour. The nodes are most of it: stop the cluster when idle with
 `az aks stop -g rg-ccc-aks-test -n <cluster>` (and `az aks start` later), and
 deallocate the jumpbox with `az vm deallocate`. With the AVM example's
