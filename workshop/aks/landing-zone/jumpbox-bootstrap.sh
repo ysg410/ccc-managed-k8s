@@ -21,6 +21,9 @@ apt-get install -y terraform
 # kubectl and kubelogin
 az aks install-cli --install-location /usr/local/bin/kubectl --kubelogin-install-location /usr/local/bin/kubelogin
 
+# Helm (Kyverno and external-dns charts)
+curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+
 # PR branch and generated inputs
 sudo -u azureuser git clone --branch "$EXAMPLE_REPO_BRANCH" "$EXAMPLE_REPO_URL" /home/azureuser/aks-avm
 install -o azureuser -g azureuser -m 0600 /opt/aks-ccc/terraform.tfvars.json "$EXAMPLE_DIR/terraform.tfvars.json"

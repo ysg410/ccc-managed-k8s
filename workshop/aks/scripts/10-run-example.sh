@@ -6,7 +6,9 @@
 # The workshop settings (node pool, AKS tier, add-ons, registry SKU) come from
 # landing-zone/workshop.auto.tfvars.json through the generated tfvars; the
 # example reads them via workshop_variables.tf and workshop_override.tf, which
-# this script copies into the clone.
+# this script copies into the clone. workshop_external_dns.tf adds the external-dns
+# workload identity; 15-install-cluster-addons.sh (run at the end) installs
+# Kyverno and external-dns.
 #
 # GRANT_ROUTE_TABLE=true (default) applies only when the landing zone has the
 # egress firewall: it creates the identities first and grants the control-plane
@@ -31,12 +33,26 @@ git pull --ff-only origin "$EXAMPLE_REPO_BRANCH"
 git log --oneline -1
 install -m 0600 /opt/aks-ccc/terraform.tfvars.json terraform.tfvars.json
 rm -f lowcost_override.tf pr_fixes_override.tf # replaced by the workshop files
-install -m 0644 /opt/aks-ccc/workshop_variables.tf /opt/aks-ccc/workshop_override.tf .
+install -m 0644 /opt/aks-ccc/workshop_variables.tf /opt/aks-ccc/workshop_override.tf /opt/aks-ccc/workshop_external_dns.tf .
 echo "==> Workshop settings"
 jq 'with_entries(select(.key | startswith("workshop_")))' terraform.tfvars.json
 
 terraform init -upgrade
 terraform validate
+
+# AKS fixes maxPods when a node pool is created; an existing cluster cannot take a new value.
+want_max_pods="$(jq -r '.workshop_node_max_pods // 30' terraform.tfvars.json)"
+if existing="$(terraform output -raw cluster_name 2>/dev/null)" && [[ -n "$existing" ]]; then
+  have_max_pods="$(az aks nodepool show -g "$RESOURCE_GROUP" --cluster-name "$existing" -n systempool --query maxPods -o tsv 2>/dev/null || true)"
+  if [[ -n "$have_max_pods" && "$have_max_pods" != "$want_max_pods" ]]; then
+    echo "Cluster $existing has maxPods $have_max_pods per node; the settings ask for $want_max_pods."
+    echo "AKS cannot change it on an existing node pool. Rebuild the cluster:"
+    echo "  /opt/aks-ccc/95-destroy-ccc-tests.sh   # only if you set up the CCC tests"
+    echo "  /opt/aks-ccc/90-destroy-example.sh"
+    echo "  /opt/aks-ccc/10-run-example.sh"
+    exit 1
+  fi
+fi
 
 if [[ "$GRANT_ROUTE_TABLE" == "true" ]]; then
   echo "==> Stage 1: create the cluster identities only"
@@ -73,4 +89,24 @@ case $rc in
 esac
 
 terraform output
+
+# The API server is private: link its DNS zone to the hub VNet so the jumpbox can
+# resolve it (outside Terraform; 90-destroy-example.sh removes the link).
+ZONE_ID="$(terraform output -raw private_dns_zone_id)"
+ZONE_NAME="${ZONE_ID##*/}"
+ZONE_RG="$(cut -d/ -f5 <<<"$ZONE_ID")"
+PRIVATE_FQDN="$(terraform output -raw private_fqdn)"
+echo "==> Linking $ZONE_NAME to the hub VNet"
+if ! az network private-dns link vnet show -g "$ZONE_RG" -z "$ZONE_NAME" -n hub-vnet -o none 2>/dev/null; then
+  az network private-dns link vnet create -g "$ZONE_RG" -z "$ZONE_NAME" -n hub-vnet \
+    --virtual-network "$HUB_VNET_ID" --registration-enabled false -o none
+fi
+for _ in $(seq 1 30); do
+  ip="$(dig +short "$PRIVATE_FQDN" | tail -1)"
+  [[ -n "$ip" ]] && break
+  sleep 10
+done
+echo "$PRIVATE_FQDN -> ${ip:-unresolved}"
+
+/opt/aks-ccc/15-install-cluster-addons.sh
 echo "Next: /opt/aks-ccc/20-verify-cluster.sh"

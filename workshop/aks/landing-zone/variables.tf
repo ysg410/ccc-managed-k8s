@@ -63,6 +63,17 @@ variable "aks_node_max_count" {
   default     = 5
 }
 
+variable "aks_node_max_pods" {
+  description = "Maximum pods per node of the example's default node pool. AKS fixes it when the node pool is created: changing it needs a cluster rebuild."
+  type        = number
+  default     = 30
+
+  validation {
+    condition     = var.aks_node_max_pods >= 30 && var.aks_node_max_pods <= 250
+    error_message = "aks_node_max_pods must be from 30 to 250."
+  }
+}
+
 variable "aks_node_zones" {
   description = "Availability zones of the example's default node pool. Only zones not restricted for the subscription work."
   type        = list(string)
@@ -103,6 +114,23 @@ variable "egress_firewall" {
   description = "Route AKS egress through Azure Firewall Basic (outboundType userDefinedRouting, ~$0.40/hour). False uses the cluster's own load balancer for egress (outboundType loadBalancer)."
   type        = bool
   default     = false
+}
+
+variable "app_dns_zone_name" {
+  description = "Private DNS zone for workload hostnames, managed by external-dns. TraderX instance N is published as traderx-N.<zone>."
+  type        = string
+  default     = "workshop.ccc.internal"
+}
+
+variable "traderx_instances" {
+  description = "Number of independent TraderX instances 30-deploy-traderx.sh deploys, in namespaces traderx-1 .. traderx-N, each with its own load balancer."
+  type        = number
+  default     = 4
+
+  validation {
+    condition     = var.traderx_instances >= 1 && var.traderx_instances <= 10 && floor(var.traderx_instances) == var.traderx_instances
+    error_message = "traderx_instances must be a whole number from 1 to 10."
+  }
 }
 
 variable "traderx_manifest_path" {

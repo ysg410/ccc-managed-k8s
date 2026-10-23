@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Run ON THE JUMPBOX after 10-run-example.sh. Links the AKS API private DNS zone
-# to the hub VNet (so the jumpbox can resolve the private API server), fetches
-# Entra credentials and checks the security settings the example claims.
+# Run ON THE JUMPBOX after 10-run-example.sh (which links the AKS API private DNS
+# zone to the hub VNet). Checks the jumpbox resolves the private API server,
+# fetches Entra credentials and checks the security settings the example claims.
 set -euo pipefail
 # shellcheck source=/dev/null
 source /opt/aks-ccc/env.sh
@@ -9,21 +9,9 @@ cd "$EXAMPLE_DIR"
 
 CLUSTER_NAME="$(terraform output -raw cluster_name)"
 PRIVATE_FQDN="$(terraform output -raw private_fqdn)"
-ZONE_ID="$(terraform output -raw private_dns_zone_id)"
-ZONE_NAME="${ZONE_ID##*/}"
-ZONE_RG="$(cut -d/ -f5 <<<"$ZONE_ID")"
-
-echo "==> Linking $ZONE_NAME to the hub VNet"
-if ! az network private-dns link vnet show -g "$ZONE_RG" -z "$ZONE_NAME" -n hub-vnet -o none 2>/dev/null; then
-  az network private-dns link vnet create -g "$ZONE_RG" -z "$ZONE_NAME" -n hub-vnet \
-    --virtual-network "$HUB_VNET_ID" --registration-enabled false -o none
-fi
-for _ in $(seq 1 30); do
-  ip="$(dig +short "$PRIVATE_FQDN" | tail -1)"
-  [[ -n "$ip" ]] && break
-  sleep 10
-done
+ip="$(dig +short "$PRIVATE_FQDN" | tail -1)"
 echo "$PRIVATE_FQDN -> ${ip:-unresolved}"
+[[ -n "$ip" ]] || { echo "The jumpbox cannot resolve the API server; rerun /opt/aks-ccc/10-run-example.sh"; exit 1; }
 
 echo "==> Cluster settings"
 az aks show -g "$RESOURCE_GROUP" -n "$CLUSTER_NAME" --query '{

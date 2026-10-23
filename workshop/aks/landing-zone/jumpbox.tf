@@ -59,19 +59,32 @@ locals {
     export EXAMPLE_REPO_URL="${var.example_repo_url}"
     export EXAMPLE_REPO_BRANCH="${var.example_repo_branch}"
     export EXAMPLE_DIR="/home/azureuser/aks-avm/examples/finos-ccc"
+    export APP_DNS_ZONE_NAME="${azurerm_private_dns_zone.apps.name}"
+    export TRADERX_INSTANCES="${var.traderx_instances}"
+    # Sources allowed to reach the TraderX load balancers: you and the jumpbox.
+    export LB_ALLOWED_CIDRS="${var.admin_ssh_source_cidr},${azurerm_public_ip.jumpbox.ip_address}/32"
   EOT
 
   jumpbox_files = {
-    "/opt/aks-ccc/env.sh"                = { content = local.jumpbox_env, mode = "0644" }
-    "/opt/aks-ccc/terraform.tfvars.json" = { content = local.example_tfvars_json, mode = "0644" }
-    "/opt/aks-ccc/bootstrap.sh"          = { content = file("${path.module}/jumpbox-bootstrap.sh"), mode = "0755" }
-    "/opt/aks-ccc/10-run-example.sh"     = { content = file("${path.module}/../scripts/10-run-example.sh"), mode = "0755" }
-    "/opt/aks-ccc/20-verify-cluster.sh"  = { content = file("${path.module}/../scripts/20-verify-cluster.sh"), mode = "0755" }
-    "/opt/aks-ccc/30-deploy-traderx.sh"  = { content = file("${path.module}/../scripts/30-deploy-traderx.sh"), mode = "0755" }
-    "/opt/aks-ccc/90-destroy-example.sh" = { content = file("${path.module}/../scripts/90-destroy-example.sh"), mode = "0755" }
-    "/opt/aks-ccc/workshop_variables.tf" = { content = file("${path.module}/../example/workshop_variables.tf"), mode = "0644" }
-    "/opt/aks-ccc/workshop_override.tf"  = { content = file("${path.module}/../example/workshop_override.tf"), mode = "0644" }
-    "/opt/aks-ccc/traderx.yaml"          = { content = file(pathexpand(coalesce(var.traderx_manifest_path, "${path.module}/../../../examples/traderx/traderx-aks-demo.yaml"))), mode = "0644" }
+    "/opt/aks-ccc/env.sh"                        = { content = local.jumpbox_env, mode = "0644" }
+    "/opt/aks-ccc/terraform.tfvars.json"         = { content = local.example_tfvars_json, mode = "0644" }
+    "/opt/aks-ccc/bootstrap.sh"                  = { content = file("${path.module}/jumpbox-bootstrap.sh"), mode = "0755" }
+    "/opt/aks-ccc/10-run-example.sh"             = { content = file("${path.module}/../scripts/10-run-example.sh"), mode = "0755" }
+    "/opt/aks-ccc/15-install-cluster-addons.sh"  = { content = file("${path.module}/../scripts/15-install-cluster-addons.sh"), mode = "0755" }
+    "/opt/aks-ccc/20-verify-cluster.sh"          = { content = file("${path.module}/../scripts/20-verify-cluster.sh"), mode = "0755" }
+    "/opt/aks-ccc/30-deploy-traderx.sh"          = { content = file("${path.module}/../scripts/30-deploy-traderx.sh"), mode = "0755" }
+    "/opt/aks-ccc/40-setup-ccc-tests.sh"         = { content = file("${path.module}/../scripts/40-setup-ccc-tests.sh"), mode = "0755" }
+    "/opt/aks-ccc/50-run-ccc-tests.sh"           = { content = file("${path.module}/../scripts/50-run-ccc-tests.sh"), mode = "0755" }
+    "/opt/aks-ccc/90-destroy-example.sh"         = { content = file("${path.module}/../scripts/90-destroy-example.sh"), mode = "0755" }
+    "/opt/aks-ccc/95-destroy-ccc-tests.sh"       = { content = file("${path.module}/../scripts/95-destroy-ccc-tests.sh"), mode = "0755" }
+    "/opt/aks-ccc/ccc-privateer-config.yml.tmpl" = { content = file("${path.module}/../ccc-tests/privateer-config.yml.tmpl"), mode = "0644" }
+    "/opt/aks-ccc/ccc-k8s-fixtures.yaml"         = { content = file("${path.module}/../ccc-tests/k8s-fixtures.yaml"), mode = "0644" }
+    "/opt/aks-ccc/ccc-webhook-probe.yaml"        = { content = file("${path.module}/../ccc-tests/webhook-probe.yaml"), mode = "0644" }
+    "/opt/aks-ccc/ccc-dashboard.py"              = { content = file("${path.module}/../ccc-tests/dashboard.py"), mode = "0755" }
+    "/opt/aks-ccc/workshop_variables.tf"         = { content = file("${path.module}/../example/workshop_variables.tf"), mode = "0644" }
+    "/opt/aks-ccc/workshop_override.tf"          = { content = file("${path.module}/../example/workshop_override.tf"), mode = "0644" }
+    "/opt/aks-ccc/workshop_external_dns.tf"      = { content = file("${path.module}/../example/workshop_external_dns.tf"), mode = "0644" }
+    "/opt/aks-ccc/traderx.yaml"                  = { content = file(pathexpand(coalesce(var.traderx_manifest_path, "${path.module}/../../../examples/traderx/traderx-aks-demo.yaml"))), mode = "0644" }
   }
 
   # Gzipped so the manifest fits in Azure's 64 KB custom data limit.
