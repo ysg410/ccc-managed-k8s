@@ -4,10 +4,13 @@
 # Run it before 90-destroy-example.sh: the identity, storage account and Entra
 # app are not in any Terraform state, and the Entra app outlives the resource group.
 # Keeps the toolchain, the CCC repo clone and ~/ccc-tests/results.
+# CCC_TARGET=vanilla cleans up the plain AVM cluster's fixtures instead.
 set -uo pipefail
 # shellcheck source=/dev/null
 source /opt/aks-ccc/env.sh
-WORK_DIR="$HOME/ccc-tests"
+# shellcheck source=/dev/null
+[[ "${CCC_TARGET:-aks}" == aks ]] || source "/opt/aks-ccc/$CCC_TARGET/target.sh"
+WORK_DIR="${CCC_WORK_DIR:-$HOME/ccc-tests}"
 ENV_FILE="$WORK_DIR/ccc-test-env.sh"
 [[ -f "$ENV_FILE" ]] || { echo "$ENV_FILE not found; nothing to remove."; exit 0; }
 # shellcheck source=/dev/null
@@ -17,7 +20,9 @@ az account show >/dev/null 2>&1 || az login --use-device-code --tenant "$TENANT_
 az account set --subscription "$SUBSCRIPTION_ID"
 
 echo "==> In-cluster fixtures"
-if kubectl get --raw /readyz >/dev/null 2>&1; then
+CLUSTER_NAME="$(terraform -chdir="$EXAMPLE_DIR" output -raw cluster_name 2>/dev/null || true)"
+if [[ -n "$CLUSTER_NAME" ]] && kubectl config use-context "$CLUSTER_NAME" >/dev/null 2>&1 \
+  && kubectl get --raw /readyz >/dev/null 2>&1; then
   kubectl delete validatingwebhookconfiguration ccc-admission-webhook-probe --ignore-not-found
   kubectl delete validatingadmissionpolicybinding,validatingadmissionpolicy --ignore-not-found \
     ccc-deny-tag-only-images ccc-deny-static-cloud-credentials ccc-deny-blocked-storage-class
@@ -30,13 +35,14 @@ fi
 
 echo "==> Azure fixtures"
 az ad app delete --id "$AZURE_TEST_USER_NO_ACCESS_CLIENT_ID" 2>/dev/null && echo "Deleted Entra app $AZURE_TEST_USER_NO_ACCESS_USER_NAME"
-az storage account delete -g "$RESOURCE_GROUP" -n "$WI_STORAGE_ACCOUNT" --yes 2>/dev/null && echo "Deleted $WI_STORAGE_ACCOUNT"
+[[ -z "${WI_STORAGE_ACCOUNT:-}" ]] || { az storage account delete -g "$RESOURCE_GROUP" -n "$WI_STORAGE_ACCOUNT" --yes 2>/dev/null && echo "Deleted $WI_STORAGE_ACCOUNT"; }
 az identity delete -g "$RESOURCE_GROUP" -n "$WI_NAME" 2>/dev/null && echo "Deleted $WI_NAME"
 if ACR="$(terraform -chdir="$EXAMPLE_DIR" output -raw container_registry_login_server 2>/dev/null)"; then
   az acr repository delete -n "${ACR%%.*}" --repository ccc-admission-webhook-probe --yes 2>/dev/null && echo "Deleted the webhook probe image"
 fi
 
 echo "==> Local files"
-sudo rm -f /usr/local/share/ca-certificates/ccc-reachability-tunnel.crt && sudo update-ca-certificates --fresh >/dev/null
+sudo rm -f "/usr/local/share/ca-certificates/ccc-reachability-tunnel-$(basename "$WORK_DIR").crt" \
+  && sudo update-ca-certificates --fresh >/dev/null
 rm -rf "$ENV_FILE" "$WORK_DIR/webhook-tls" "$WORK_DIR/tunnel.crt" "$WORK_DIR/tunnel.key" "$WORK_DIR/reachability-secret"
 echo "Done. Results are kept in $WORK_DIR/results."

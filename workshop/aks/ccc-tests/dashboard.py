@@ -252,7 +252,11 @@ def main():
     parser.add_argument("--catalogs", help="directory with CCC.<id>_<version>-controls.yaml")
     parser.add_argument("--config", help="rendered Privateer config used for the run")
     parser.add_argument("--out", help="output HTML (default <results>/dashboard.html)")
+    parser.add_argument("--no-workshop-notes", action="store_true",
+                        help="omit the notes about the hardened workshop's low-cost settings")
     args = parser.parse_args()
+    if args.no_workshop_notes:
+        WORKSHOP_NOTES.clear()
 
     findings = load_findings(args.results)
     if not findings:

@@ -11,16 +11,20 @@
 #
 # Optional: CCC_TAGS='@CCC.K8S.CN06' (extra Cucumber tag filter), CCC_TIMEOUT=60m,
 # CCC_DEBUG=1 (run the plugin in-process without pvtr, as upstream CI does).
+# CCC_TARGET=vanilla tests the plain AVM cluster from workshop/aks-vanilla.
 set -uo pipefail
 # shellcheck source=/dev/null
 source /opt/aks-ccc/env.sh
-WORK_DIR="$HOME/ccc-tests"
+# shellcheck source=/dev/null
+[[ "${CCC_TARGET:-aks}" == aks ]] || source "/opt/aks-ccc/$CCC_TARGET/target.sh"
+WORK_DIR="${CCC_WORK_DIR:-$HOME/ccc-tests}"
 ENV_FILE="$WORK_DIR/ccc-test-env.sh"
 TUNNEL_PORT=18080 # 55-run-ccc-tests-from-laptop.sh forwards the laptop observer here
 TLS_PORT=18443    # socat terminates TLS here (the plugin only calls HTTPS observers)
 export PATH="/usr/local/go/bin:$HOME/go/bin:$PATH"
+SETUP_HINT="${CCC_SETUP_HINT:-/opt/aks-ccc/40-setup-ccc-tests.sh}"
 
-[[ -f "$ENV_FILE" ]] || { echo "$ENV_FILE not found. Run /opt/aks-ccc/40-setup-ccc-tests.sh first."; exit 1; }
+[[ -f "$ENV_FILE" ]] || { echo "$ENV_FILE not found. Run $SETUP_HINT first."; exit 1; }
 # shellcheck source=/dev/null
 source "$ENV_FILE"
 
@@ -34,12 +38,15 @@ tf_out() { terraform -chdir="$EXAMPLE_DIR" output -raw "$1"; }
 export LOCATION RESOURCE_GROUP SUBSCRIPTION_ID TENANT_ID WI_STORAGE_ACCOUNT
 export CLUSTER_NAME PRIVATE_FQDN OIDC_ISSUER_URL LOG_ANALYTICS_WORKSPACE_GUID
 CLUSTER_NAME="$(tf_out cluster_name)" || exit 1
-PRIVATE_FQDN="$(tf_out private_fqdn)"
+# The API server FQDN the CN01 reachability probe targets (public for the vanilla cluster).
+PRIVATE_FQDN="$(tf_out "${CCC_FQDN_OUTPUT:-private_fqdn}")"
 OIDC_ISSUER_URL="$(tf_out oidc_issuer_url)"
 LOG_ANALYTICS_WORKSPACE_GUID="$(az monitor log-analytics workspace show --ids "$(tf_out log_analytics_workspace_id)" --query customerId -o tsv)"
 
-getent hosts "$PRIVATE_FQDN" >/dev/null || { echo "$PRIVATE_FQDN does not resolve. Run /opt/aks-ccc/20-verify-cluster.sh first."; exit 1; }
-kubectl get namespace ccc-test >/dev/null 2>&1 || { echo "Fixtures missing. Run /opt/aks-ccc/40-setup-ccc-tests.sh first."; exit 1; }
+getent hosts "$PRIVATE_FQDN" >/dev/null || { echo "$PRIVATE_FQDN does not resolve. Run ${CCC_VERIFY_HINT:-/opt/aks-ccc/20-verify-cluster.sh} first."; exit 1; }
+# 40-setup-ccc-tests.sh fetched this cluster's credentials; make sure kubectl and the plugin use them.
+kubectl config use-context "$CLUSTER_NAME" >/dev/null || { echo "No kubeconfig context $CLUSTER_NAME. Run $SETUP_HINT first."; exit 1; }
+kubectl get namespace ccc-test >/dev/null 2>&1 || { echo "Fixtures missing. Run $SETUP_HINT first."; exit 1; }
 
 export REACHABILITY_PROBE_MODE REACHABILITY_PROBE_URL REACHABILITY_PROBE_OBSERVER REACHABILITY_PROBE_SHARED_SECRET
 if curl -fsS -m 5 "http://127.0.0.1:$TUNNEL_PORT/healthz" >/dev/null 2>&1 && [[ -f "$WORK_DIR/reachability-secret" ]]; then
@@ -78,8 +85,9 @@ rc=${PIPESTATUS[0]}
 ln -sfn "$OUT" "$WORK_DIR/results/latest"
 
 echo "==> Dashboard"
+# shellcheck disable=SC2086 # CCC_DASHBOARD_ARGS holds separate flags
 python3 /opt/aks-ccc/ccc-dashboard.py --results "$OUT" --config "$CONFIG" \
-  --catalogs "$CCC_DIR/website/src/data/ccc-releases" || echo "Dashboard failed; see $OUT/run.log"
+  --catalogs "$CCC_DIR/website/src/data/ccc-releases" ${CCC_DASHBOARD_ARGS:-} || echo "Dashboard failed; see $OUT/run.log"
 
 cat <<EOF
 

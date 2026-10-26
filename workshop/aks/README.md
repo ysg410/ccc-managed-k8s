@@ -254,6 +254,10 @@ at most 1000m/2Gi per container, which the TraderX manifest does not meet.
 
 ## 5. CCC behavioural tests and compliance dashboard
 
+To run the same tests against a plain AKS cluster built with the published AVM
+module (no PR #333 controls) for comparison, see [`../aks-vanilla`](../aks-vanilla).
+It reuses this landing zone, jumpbox and these scripts (`CCC_TARGET=vanilla`).
+
 These tests check the cluster against the FINOS Common Cloud Controls
 (CCC.K8S, plus the CCC.Core requirements that apply to Kubernetes). They use
 [common-cloud-controls](https://github.com/finos/common-cloud-controls), branch

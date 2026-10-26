@@ -13,11 +13,19 @@
 # It listens on 127.0.0.1 only, accepts HMAC-signed requests with a per-run
 # secret and only probes *.azmk8s.io on port 443.
 # Optional: CCC_TAGS, CCC_DEBUG (passed to 50-run-ccc-tests.sh), REBUILD=1.
+# CCC_TARGET=vanilla (set by workshop/aks-vanilla/scripts/55-run-ccc-tests-from-laptop.sh)
+# tests the plain AVM cluster; CCC_RESULTS_DIR overrides where results are copied.
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PORT=18080
 OBSERVER=laptop-internet
-RESULTS="$ROOT/ccc-results"
+CCC_TARGET="${CCC_TARGET:-aks}"
+RESULTS="${CCC_RESULTS_DIR:-$ROOT/ccc-results}"
+if [[ "$CCC_TARGET" == aks ]]; then
+  REMOTE_WORK='~/ccc-tests' SETUP_HINT=/opt/aks-ccc/40-setup-ccc-tests.sh
+else
+  REMOTE_WORK="~/ccc-tests-$CCC_TARGET" SETUP_HINT="/opt/aks-ccc/$CCC_TARGET/40-setup-ccc-tests.sh"
+fi
 
 TARGET="$(terraform -chdir="$ROOT/landing-zone" output -raw jumpbox_ssh | awk '{print $2}')"
 case "$(uname -s)/$(uname -m)" in
@@ -29,19 +37,19 @@ case "$(uname -s)/$(uname -m)" in
 esac
 BIN="$RESULTS/.bin/ccc-reachability-probe-$GOOS-$GOARCH"
 mkdir -p "$RESULTS/.bin"
-ssh "$TARGET" 'test -f ~/ccc-tests/ccc-test-env.sh' \
-  || { echo "Setup has not completed on the jumpbox. Run /opt/aks-ccc/40-setup-ccc-tests.sh there first."; exit 1; }
+ssh "$TARGET" "test -f $REMOTE_WORK/ccc-test-env.sh" \
+  || { echo "Setup has not completed on the jumpbox. Run $SETUP_HINT there first."; exit 1; }
 
 if [[ ! -x "$BIN" || -n "${REBUILD:-}" ]]; then
   echo "==> Building the reachability observer for $GOOS/$GOARCH on the jumpbox"
-  ssh "$TARGET" "set -e; source ~/ccc-tests/ccc-test-env.sh; cd \"\$CCC_DIR/modules/probes/reachability\"
+  ssh "$TARGET" "set -e; source $REMOTE_WORK/ccc-test-env.sh; cd \"\$CCC_DIR/modules/probes/reachability\"
     GOWORK=off CGO_ENABLED=0 GOOS=$GOOS GOARCH=$GOARCH /usr/local/go/bin/go build -trimpath -o /tmp/ccc-reachability-probe ."
   scp -q "$TARGET:/tmp/ccc-reachability-probe" "$BIN"
   chmod +x "$BIN"
 fi
 
 SECRET="$(openssl rand -hex 32)"
-ssh "$TARGET" 'umask 077; cat > ~/ccc-tests/reachability-secret' <<<"$SECRET"
+ssh "$TARGET" "umask 077; cat > $REMOTE_WORK/reachability-secret" <<<"$SECRET"
 
 echo "==> Starting the observer on 127.0.0.1:$PORT"
 SHARED_SECRET="$SECRET" TARGET_ALLOWLIST='*.azmk8s.io' PORT_ALLOWLIST=443 OBSERVER_NAME="$OBSERVER" \
@@ -49,7 +57,7 @@ SHARED_SECRET="$SECRET" TARGET_ALLOWLIST='*.azmk8s.io' PORT_ALLOWLIST=443 OBSERV
 OBSERVER_PID=$!
 cleanup() {
   kill "$OBSERVER_PID" 2>/dev/null || true
-  ssh "$TARGET" 'rm -f ~/ccc-tests/reachability-secret' || true
+  ssh "$TARGET" "rm -f $REMOTE_WORK/reachability-secret" || true
 }
 trap cleanup EXIT
 sleep 1
@@ -58,11 +66,11 @@ curl -fsS -m 5 "http://127.0.0.1:$PORT/healthz" >/dev/null || { cat "$RESULTS/.b
 echo "==> Running the tests on the jumpbox (tunnel: jumpbox 127.0.0.1:$PORT -> laptop observer)"
 set +e
 ssh -t -o ExitOnForwardFailure=yes -R "$PORT:127.0.0.1:$PORT" "$TARGET" \
-  "CCC_TAGS='${CCC_TAGS:-}' CCC_DEBUG='${CCC_DEBUG:-0}' /opt/aks-ccc/50-run-ccc-tests.sh"
+  "CCC_TARGET='$CCC_TARGET' CCC_TAGS='${CCC_TAGS:-}' CCC_DEBUG='${CCC_DEBUG:-0}' /opt/aks-ccc/50-run-ccc-tests.sh"
 rc=$?
 set -e
 
-LATEST="$(ssh "$TARGET" 'readlink -f ~/ccc-tests/results/latest' || true)"
+LATEST="$(ssh "$TARGET" "readlink -f $REMOTE_WORK/results/latest" || true)"
 if [[ -n "$LATEST" ]]; then
   scp -q -r "$TARGET:$LATEST" "$RESULTS/"
   DASHBOARD="$RESULTS/$(basename "$LATEST")/dashboard.html"

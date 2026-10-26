@@ -21,13 +21,19 @@
 #
 # Writes ~/ccc-tests/ccc-test-env.sh (mode 0600, holds the service principal
 # secret). Remove everything with 95-destroy-ccc-tests.sh.
+#
+# CCC_TARGET=vanilla targets the plain AVM cluster from workshop/aks-vanilla
+# instead (/opt/aks-ccc/vanilla/target.sh sets its Terraform directory, resource
+# group and ~/ccc-tests-vanilla work directory).
 set -euo pipefail
 # shellcheck source=/dev/null
 source /opt/aks-ccc/env.sh
+# shellcheck source=/dev/null
+[[ "${CCC_TARGET:-aks}" == aks ]] || source "/opt/aks-ccc/$CCC_TARGET/target.sh"
 CCC_REPO_URL="${CCC_REPO_URL:-https://github.com/finos/common-cloud-controls.git}"
 CCC_REPO_BRANCH="${CCC_REPO_BRANCH:-managed-k8s-behavioural}"
 CCC_DIR="${CCC_DIR:-$HOME/common-cloud-controls}"
-WORK_DIR="$HOME/ccc-tests"
+WORK_DIR="${CCC_WORK_DIR:-$HOME/ccc-tests}"
 ENV_FILE="$WORK_DIR/ccc-test-env.sh"
 FILES=/opt/aks-ccc
 export PATH="/usr/local/go/bin:$HOME/go/bin:$PATH"
@@ -96,7 +102,7 @@ ACR_LOGIN_SERVER="$(tf_out container_registry_login_server)"
 SUFFIX="$(tr -cd 'a-z0-9' <<<"${CLUSTER_NAME##*-}")"
 az aks get-credentials -g "$RESOURCE_GROUP" -n "$CLUSTER_NAME" --overwrite-existing >/dev/null
 kubelogin convert-kubeconfig -l azurecli
-kubectl get --raw /readyz >/dev/null || { echo "kubectl cannot reach $CLUSTER_NAME. Run /opt/aks-ccc/20-verify-cluster.sh first."; exit 1; }
+kubectl get --raw /readyz >/dev/null || { echo "kubectl cannot reach $CLUSTER_NAME. Run ${CCC_VERIFY_HINT:-/opt/aks-ccc/20-verify-cluster.sh} first."; exit 1; }
 echo "Cluster: $CLUSTER_NAME, registry: $ACR_LOGIN_SERVER"
 
 # Saved after each fixture so a failed run keeps the service principal secret.
@@ -155,6 +161,7 @@ echo "$SP_NAME: appId $AZURE_TEST_USER_NO_ACCESS_CLIENT_ID, role assignments: $R
 [[ "$ROLE_COUNT" == "0" ]] || echo "WARNING: test-user-no-access must have no role assignments; remove them."
 
 step "Workload identity probe: managed identity, federated credential, storage account"
+setup_workload_identity_probe() {
 az identity create -g "$RESOURCE_GROUP" -n "$WI_NAME" -l "$LOCATION" --tags "${TAGS[@]}" -o none
 WI_CLIENT_ID="$(az identity show -g "$RESOURCE_GROUP" -n "$WI_NAME" --query clientId -o tsv)"
 WI_PRINCIPAL_ID="$(az identity show -g "$RESOURCE_GROUP" -n "$WI_NAME" --query principalId -o tsv)"
@@ -177,11 +184,20 @@ if [[ "$(role_count "$WI_PRINCIPAL_ID" "$STORAGE_ID" "Storage Blob Data Reader")
     --role "Storage Blob Data Reader" --scope "$STORAGE_ID" -o none
 fi
 echo "$WI_NAME (client $WI_CLIENT_ID) can read $WI_STORAGE_ACCOUNT/probe/probe.txt"
+}
+if [[ -n "$OIDC_ISSUER_URL" ]]; then
+  setup_workload_identity_probe
+else
+  # A cluster without an OIDC issuer cannot federate service accounts: CCC.K8S.CN03.AR01 fails.
+  echo "No OIDC issuer on $CLUSTER_NAME: skipping the workload identity probe (CCC.K8S.CN03.AR01 will fail)."
+  WI_CLIENT_ID="" WI_STORAGE_ACCOUNT=""
+  write_env
+fi
 echo "Saved $ENV_FILE"
 
 step "In-cluster fixtures"
 kubectl apply -f "$FILES/ccc-k8s-fixtures.yaml"
-kubectl -n ccc-test annotate serviceaccount ccc-wi-sa "azure.workload.identity/client-id=$WI_CLIENT_ID" --overwrite
+[[ -z "$WI_CLIENT_ID" ]] || kubectl -n ccc-test annotate serviceaccount ccc-wi-sa "azure.workload.identity/client-id=$WI_CLIENT_ID" --overwrite
 kubectl -n ccc-network-control wait deployment --all --for=condition=Available --timeout=5m
 kubectl -n ccc-test wait deployment --all --for=condition=Available --timeout=5m
 
@@ -213,18 +229,20 @@ if ! deploy_webhook_probe; then
 fi
 
 step "Localhost certificate for the reachability observer tunnel"
-if [[ ! -f /usr/local/share/ca-certificates/ccc-reachability-tunnel.crt ]]; then
+# One per work directory, so each target has its own key.
+TUNNEL_CA="/usr/local/share/ca-certificates/ccc-reachability-tunnel-$(basename "$WORK_DIR").crt"
+if [[ ! -f "$WORK_DIR/tunnel.key" || ! -f "$TUNNEL_CA" ]]; then
   (umask 077; openssl req -x509 -newkey rsa:2048 -nodes -days 365 -keyout "$WORK_DIR/tunnel.key" \
     -out "$WORK_DIR/tunnel.crt" -subj "/CN=localhost" -addext "subjectAltName=DNS:localhost,IP:127.0.0.1" 2>/dev/null)
-  sudo cp "$WORK_DIR/tunnel.crt" /usr/local/share/ca-certificates/ccc-reachability-tunnel.crt
+  sudo cp "$WORK_DIR/tunnel.crt" "$TUNNEL_CA"
   sudo update-ca-certificates >/dev/null
 fi
-echo "Trusted: /usr/local/share/ca-certificates/ccc-reachability-tunnel.crt"
+echo "Trusted: $TUNNEL_CA"
 
 cat <<EOF
 
 CCC test setup complete. Next, from your laptop (recommended, probes the API from an untrusted network):
-  ./scripts/55-run-ccc-tests-from-laptop.sh
+  ${CCC_LAPTOP_RUN_HINT:-./scripts/55-run-ccc-tests-from-laptop.sh}
 or here on the jumpbox (CCC.K8S.CN01 then probes from inside the approved network):
-  /opt/aks-ccc/50-run-ccc-tests.sh
+  ${CCC_JUMPBOX_RUN_HINT:-/opt/aks-ccc/50-run-ccc-tests.sh}
 EOF
