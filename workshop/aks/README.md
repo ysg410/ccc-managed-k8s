@@ -96,6 +96,34 @@ jumpbox size is usable in the region, checks `cores` and per-family vCPU quota
 creates `~/.ssh/id_rsa` if missing and writes `landing-zone/terraform.tfvars`
 with your subscription, region, public IP and SSH key.
 
+**Tenant, subscription and region** are inputs; the repository hard-codes no
+tenant or subscription:
+
+| Variable | Default | Used for |
+| --- | --- | --- |
+| `TENANT_ID` | the tenant you are signed in to | signs in to that tenant (device code) and checks the subscription is in it |
+| `SUBSCRIPTION_ID` | the one in `terraform.tfvars`, else the current `az` account | `subscription_id` in `terraform.tfvars` |
+| `LOCATION` | the one in `terraform.tfvars`, else `centralindia` | `location` in `terraform.tfvars` (short name, see `az account list-locations -o table`) |
+
+Rerunning with a different `SUBSCRIPTION_ID` or `LOCATION` updates
+`terraform.tfvars`; the preflight refuses while a landing zone is deployed from
+this directory, because its local state belongs to one subscription and region.
+The landing zone, both clusters, the jumpbox (`env.sh`) and the CCC tests take
+all three from there. The Terraform providers use your `az` sign-in, so apply
+the landing zone from the same sign-in. To keep a second tenant's sign-in
+separate, export `AZURE_CONFIG_DIR` (for example `~/.azure-tenant2`) in that
+terminal before `az login`.
+
+```bash
+# A different tenant, subscription and region
+export AZURE_CONFIG_DIR=~/.azure-tenant2   # optional: separate az sign-in
+TENANT_ID=<tenant-id> SUBSCRIPTION_ID=<subscription-id> LOCATION=westeurope ./scripts/00-preflight.sh
+```
+
+Zone and SKU support differ by subscription and region: if the preflight
+reports zone 1 is not usable, change `aks_node_zones` (or `aks_node_vm_size`) in
+`workshop.auto.tfvars.json`.
+
 The sizes and zones it checks come from `workshop.auto.tfvars.json`. If it
 reports that more zones are usable for your subscription, you can set
 `aks_node_zones` to `["1", "2", "3"]` there. The quota requested covers the
@@ -133,7 +161,10 @@ The script logs you in with a device code, runs `init`/`validate`, deploys
 in two stages (see below), asks before applying the full plan (about 42
 resources), then runs `terraform plan -detailed-exitcode` and prints IDEMPOTENT
 or DRIFT. AVM telemetry is off (`enable_telemetry = false` in the generated
-inputs), so IDEMPOTENT is expected.
+inputs), so IDEMPOTENT is expected. The generated inputs also set
+`workload_namespaces = {}`, so the example creates no AKS managed namespace
+(its default `workload-a`, with a workload identity); workshop namespaces are
+plain Kubernetes namespaces.
 
 Most of the time is AKS: ~5 minutes to create the cluster with the workshop
 settings, then ~15–20 minutes while the module's node-pool update replaces the
@@ -165,6 +196,17 @@ Pin versions with `KYVERNO_CHART_VERSION` / `EXTERNAL_DNS_CHART_VERSION`. The
 images come from public registries, which works because Azure Policy is off.
 With `aks_azure_policy_enabled = true`, import them into the private registry
 first.
+
+**Pod Security labels (workshop only).** Last, the script labels every
+namespace except `kube-system` with `pod-security.kubernetes.io/enforce=baseline`
+and `pod-security.kubernetes.io/enforce-version=latest`, and lists the result.
+`kube-system` gets `pod-security.kubernetes.io/enforce=privileged` instead,
+because AKS runs privileged system pods there (Cilium, kube-proxy, CSI drivers)
+that baseline would keep from starting on new nodes; the explicit label records
+that decision (CCC.K8S.CN11.AR01 needs a label on every namespace).
+Namespaces that already enforce `restricted` keep it. kubectl prints a warning
+for any running pod that baseline would reject. Namespaces created later (TraderX,
+the CCC fixtures) are not labeled by this step.
 
 **Security alerts.** The example creates an action group that emails the
 subscription's Owners. Expect alert emails when the cluster, role assignments or
@@ -338,16 +380,36 @@ These come from the low-cost settings, not from the AVM example:
 - **CCC.Core.CN04, CCC.K8S.CN14 (audit logging) fail**:
   `aks_monitoring_enabled = false` sends no audit logs to Log Analytics. To
   test them, set it to `true`, apply the landing zone and the example, wait
-  ~15 minutes and rerun (Log Analytics ingestion is billed per GB).
-- **CCC.K8S.CN11.AR01 fails** while any namespace (`default`, `traderx-1`, ...)
-  has no `pod-security.kubernetes.io/enforce` label; the Azure Policy add-on
-  is off.
+  ~15 minutes and rerun (Log Analytics ingestion is billed per GB). With it
+  on, `example/workshop_override.tf` also enables public query access on the
+  workspace: the example keeps queries private (AVM default), so the tests'
+  log queries from the jumpbox fail with `NspValidationFailedError` (403).
+  Queries still need Entra ID sign-in and RBAC on the workspace.
+- **CCC.K8S.CN11.AR01 fails** while any namespace has no
+  `pod-security.kubernetes.io/enforce` label. `10-run-example.sh` labels every
+  namespace (`kube-system` as `privileged`), so namespaces created after it
+  (`traderx-N`) fail it until you rerun the script. The Azure Policy add-on is off.
 - The test namespace has its own guardrails (above), so admission scenarios
   check that guardrail pattern, not cluster-wide policy.
 
 The tests are from a work-in-progress upstream branch, so some failures can be
 in the scenarios themselves; the dashboard shows the failing step and error so
-you can tell. CN04/CN14 also add the tag `ccc_compliance_test` to the cluster;
+you can tell. `ccc-tests/privateer-config.yml.tmpl` works around two harness
+issues: the AKS audit query expects columns the resource-specific `AKSAudit`
+table does not have (CN04.AR02/AR03, `azure-k8s-audit-table`), and AKS add-on
+ClusterRoles are not treated as system roles (CN02.AR02, `system-role-prefixes`).
+Known harness issues without a workaround:
+
+- **CCC.K8S.CN03.AR02**: the guardrail denies the static-credential pod, but
+  the harness treats any denial whose message contains "forbidden" (every
+  ValidatingAdmissionPolicy denial) as a missing permission ("unassessed").
+- **CCC.K8S.CN13.AR01/AR02**: the scenarios expect an error, but the harness
+  returns `Denied: true` without an error for denials whose message lacks
+  "forbidden" (the LimitRange rejects the quota pod as Invalid), and the
+  `ccc-test` LimitRange defaults bounds for pods without them, which the
+  harness's own network-probe Jobs rely on.
+
+CN04/CN14 also add the tag `ccc_compliance_test` to the cluster;
 the example's next `terraform plan` removes it (expected drift).
 
 ## 6. Tear down (stop the costs)

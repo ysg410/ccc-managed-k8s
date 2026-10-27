@@ -63,6 +63,23 @@ services:
       # Log Analytics workspace customer ID (GUID), not the ARM ID. Audit logs
       # only arrive when aks_monitoring_enabled = true.
       azure-log-analytics-workspace-id: "${LOG_ANALYTICS_WORKSPACE_GUID}"
+      # CCC.Core.CN04.AR02/AR03: the harness's AKS audit query (azure-logging.go)
+      # filters on verb, user, ClusterName, ResourceId and ResultType, which the
+      # resource-specific AKSAudit table (the example's diagnostic setting) does not
+      # have, so it falls back to the empty AzureDiagnostics table. The table value
+      # is pasted at the start of the query: add the expected columns here.
+      azure-k8s-audit-table: "AKSAudit | extend verb = tolower(Verb), user = tostring(User.username), ClusterName = '', ResourceId = _ResourceId, ResultType = ''"
+
+      # CN02.AR02: ClusterRoles owned by AKS add-ons, which AKS reconciles (the
+      # harness already skips system:, kube-, aks-, azure-policy ...).
+      # cilium-operator: AKS-managed Cilium (Helm release cilium, managed by Eno).
+      # ama-logs-reader: Container Insights (Helm release aks-managed-azure-monitor-logs);
+      # reads only the secret aad-msi-auth-token.
+      system-role-prefixes:
+        - "system:"
+        - "kube-"
+        - "cilium-operator"
+        - "ama-logs-reader"
 
       # CN15: the example's required tags (variables.tf validation).
       required-metadata-keys:

@@ -81,6 +81,15 @@ module "aks" {
   }
 }
 
+# Workshop deviation from the example: with monitoring on, allow Log Analytics
+# queries over the public endpoint so the CCC tests (CCC.Core.CN04.AR02/AR03) can
+# read the AKS audit logs from the jumpbox. Queries still need Entra ID sign-in and
+# Azure RBAC on the workspace. The example keeps queries private (the AVM default),
+# which needs an Azure Monitor Private Link Scope to query from inside the network.
+module "log_analytics" {
+  log_analytics_workspace_internet_query_enabled = var.workshop_monitoring_enabled ? "true" : "false"
+}
+
 module "policy_restricted_pod_security" {
   count = var.workshop_azure_policy_enabled ? 1 : 0
 }

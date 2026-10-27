@@ -5,20 +5,46 @@
 #
 #   LOCATION=centralindia ./scripts/00-preflight.sh
 #
+# LOCATION picks the region (default: the one in terraform.tfvars, else
+# centralindia) and updates terraform.tfvars if it differs. Every later step
+# takes the region from there. SUBSCRIPTION_ID (default: the current az account)
+# is written to a new terraform.tfvars; TENANT_ID, if set, signs in to that tenant.
+#
 # Checks the node pool and jumpbox sizes in landing-zone/workshop.auto.tfvars.json
 # (2 x Standard_D4s_v5 in zone 1 + Standard_B2als_v2 = 10 vCPUs by default, so a
 # Free Trial subscription with its 4 vCPU cap must be upgraded first). Edit that
 # file to change the sizing, then rerun.
 set -euo pipefail
 
-LOCATION="${LOCATION:-centralindia}"
 SSH_KEY="${SSH_KEY:-$HOME/.ssh/id_rsa}"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TFVARS="$ROOT/landing-zone/terraform.tfvars"
 SETTINGS="$ROOT/landing-zone/workshop.auto.tfvars.json"
+STATE="$ROOT/landing-zone/terraform.tfstate"
 
 fail() { echo "ERROR: $*" >&2; exit 1; }
 step() { echo; echo "==> $*"; }
+
+# Region and subscription: the environment variable, else the value already in
+# terraform.tfvars, else the default. Either can change only while no landing
+# zone is deployed from this directory (its local state belongs to one of each).
+tfvar() { [[ -f "$TFVARS" ]] && sed -n "s/^$1 *= *\"\(.*\)\".*/\1/p" "$TFVARS" || true; }
+set_tfvar() {
+  sed -i.bak "/^$1 *=/d" "$TFVARS" && rm -f "$TFVARS.bak"
+  printf '%-21s = "%s"\n' "$1" "$2" >> "$TFVARS"
+  echo "Set $1 = \"$2\""
+}
+DEPLOYED=false
+[[ -f "$STATE" ]] && jq -e '(.resources // []) | length > 0' "$STATE" >/dev/null && DEPLOYED=true
+TFVARS_LOCATION="$(tfvar location)"
+TFVARS_SUBSCRIPTION="$(tfvar subscription_id)"
+
+LOCATION="${LOCATION:-${TFVARS_LOCATION:-centralindia}}"
+[[ "$LOCATION" =~ ^[a-z0-9]+$ ]] || fail "LOCATION must be a short region name such as centralindia (az account list-locations -o table)"
+if [[ -n "$TFVARS_LOCATION" && "$TFVARS_LOCATION" != "$LOCATION" ]] && $DEPLOYED; then
+  fail "The landing zone is deployed in $TFVARS_LOCATION. Destroy it (and the cluster) before moving to $LOCATION."
+fi
+echo "Region: $LOCATION"
 
 for cmd in az terraform jq curl ssh-keygen; do
   command -v "$cmd" >/dev/null || fail "$cmd is not installed"
@@ -30,9 +56,19 @@ NODE_ZONES="$(jq -r '.aks_node_zones | join(" ")' "$SETTINGS")"
 JUMPBOX_SIZE="$(jq -r '.jumpbox_vm_size' "$SETTINGS")"
 
 step "Azure login"
-az account show >/dev/null 2>&1 || az login --use-device-code >/dev/null
-SUBSCRIPTION_ID="${SUBSCRIPTION_ID:-$(az account show --query id -o tsv)}"
+if [[ -n "${TENANT_ID:-}" ]]; then
+  [[ "$(az account show --query tenantId -o tsv 2>/dev/null || true)" == "$TENANT_ID" ]] ||
+    az login --use-device-code --tenant "$TENANT_ID" >/dev/null
+else
+  az account show >/dev/null 2>&1 || az login --use-device-code >/dev/null
+fi
+SUBSCRIPTION_ID="${SUBSCRIPTION_ID:-${TFVARS_SUBSCRIPTION:-$(az account show --query id -o tsv)}}"
+if [[ -n "$TFVARS_SUBSCRIPTION" && "$TFVARS_SUBSCRIPTION" != "$SUBSCRIPTION_ID" ]] && $DEPLOYED; then
+  fail "The landing zone is deployed in subscription $TFVARS_SUBSCRIPTION. Destroy it (and the cluster) first, or use a separate copy of workshop/ for $SUBSCRIPTION_ID."
+fi
 az account set --subscription "$SUBSCRIPTION_ID"
+[[ -z "${TENANT_ID:-}" || "$(az account show --query tenantId -o tsv)" == "$TENANT_ID" ]] ||
+  fail "Subscription $SUBSCRIPTION_ID is not in tenant $TENANT_ID"
 az account show --query "{subscription:name, id:id, tenant:tenantId, user:user.name}" -o table
 # Recent Azure CLI versions no longer return subscriptionPolicies from `az account show`.
 QUOTA_ID="$(az rest --method get --url "https://management.azure.com/subscriptions/$SUBSCRIPTION_ID?api-version=2022-12-01" \
@@ -156,7 +192,9 @@ echo "Using $SSH_KEY.pub"
 step "Writing $TFVARS"
 MY_IP="$(curl -fsS https://api.ipify.org)"
 if [[ -f "$TFVARS" ]]; then
-  echo "Exists; not overwriting. Your current public IP is $MY_IP/32."
+  [[ "$TFVARS_SUBSCRIPTION" == "$SUBSCRIPTION_ID" ]] || set_tfvar subscription_id "$SUBSCRIPTION_ID"
+  [[ "$TFVARS_LOCATION" == "$LOCATION" ]] || set_tfvar location "$LOCATION"
+  echo "Otherwise kept as is. Your current public IP is $MY_IP/32."
 else
   cat > "$TFVARS" <<EOF
 subscription_id       = "$SUBSCRIPTION_ID"

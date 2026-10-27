@@ -51,7 +51,7 @@ metadata:
   labels:
     app: edge-proxy
   annotations:
-    external-dns.alpha.kubernetes.io/hostname: $host
+    external-dns.kubernetes.io/hostname: $host
 spec:
   type: LoadBalancer
   selector:

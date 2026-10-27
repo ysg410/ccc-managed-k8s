@@ -366,6 +366,9 @@ locals {
     service_cidr     = local.service_cidr
     dns_service_ip   = local.dns_ip
     tags             = var.tags
+    # No AKS managed namespaces (the example's default creates workload-a, with its
+    # workload identity, as an ARM resource). Workshop namespaces are plain Kubernetes ones.
+    workload_namespaces = {}
 
     # Declared by ../example/workshop_variables.tf in the jumpbox's clone.
     workshop_node_vm_size           = var.aks_node_vm_size

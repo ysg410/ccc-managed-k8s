@@ -109,4 +109,21 @@ done
 echo "$PRIVATE_FQDN -> ${ip:-unresolved}"
 
 /opt/aks-ccc/15-install-cluster-addons.sh
+
+# Pod Security Admission: enforce the baseline profile in every namespace except
+# kube-system, where AKS runs privileged system pods (Cilium, kube-proxy, CSI
+# drivers) that baseline would keep from starting on new nodes. kube-system is
+# labeled privileged instead, so every namespace has an explicit decision
+# (CCC.K8S.CN11.AR01). Namespaces that already enforce restricted (the CCC
+# fixtures) are left alone. kubectl prints a warning for each running pod that
+# baseline would reject.
+echo "==> Pod Security: enforce=baseline (version latest) in every namespace, privileged in kube-system"
+mapfile -t PSA_NAMESPACES < <(kubectl get namespaces -o json |
+  jq -r '.items[] | select(.metadata.name != "kube-system")
+    | select(.metadata.labels["pod-security.kubernetes.io/enforce"] != "restricted") | .metadata.name')
+kubectl label --overwrite namespace "${PSA_NAMESPACES[@]}" \
+  pod-security.kubernetes.io/enforce=baseline pod-security.kubernetes.io/enforce-version=latest
+kubectl label --overwrite namespace kube-system pod-security.kubernetes.io/enforce=privileged
+kubectl get namespaces -L pod-security.kubernetes.io/enforce,pod-security.kubernetes.io/enforce-version
+
 echo "Next: /opt/aks-ccc/20-verify-cluster.sh"
