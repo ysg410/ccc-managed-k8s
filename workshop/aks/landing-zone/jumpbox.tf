@@ -1,4 +1,4 @@
-# Jumpbox in the hub VNet. Terraform for the PR example must run from here: the
+# Jumpbox in the hub VNet. Terraform for the AKS example must run from here: the
 # example's Key Vault has public access disabled and the AKS API is private.
 
 resource "azurerm_public_ip" "jumpbox" {
@@ -56,8 +56,7 @@ locals {
     export RESOURCE_GROUP="${azurerm_resource_group.this.name}"
     export HUB_VNET_ID="${azurerm_virtual_network.hub.id}"
     export ROUTE_TABLE_ID="${try(azurerm_route_table.nodes[0].id, "")}"
-    export EXAMPLE_REPO_URL="${var.example_repo_url}"
-    export EXAMPLE_REPO_BRANCH="${var.example_repo_branch}"
+    export AKS_MODULE_VERSION="${var.aks_module_version}"
     export EXAMPLE_DIR="/home/azureuser/aks-avm/examples/finos-ccc"
     export APP_DNS_ZONE_NAME="${azurerm_private_dns_zone.apps.name}"
     export TRADERX_INSTANCES="${var.traderx_instances}"

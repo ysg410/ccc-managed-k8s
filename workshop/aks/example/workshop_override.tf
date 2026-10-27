@@ -1,7 +1,7 @@
 # Applies workshop_variables.tf to the AVM AKS example (examples/finos-ccc). NOT
 # part of the example. Terraform merges override files over the example's blocks:
 # https://developer.hashicorp.com/terraform/language/files/override
-# Each value below mirrors the example at bb2fa8d with the workshop variables
+# Each value below mirrors the example at v0.8.6 with the workshop variables
 # substituted, so the example's defaults apply when the variables are not set.
 
 locals {

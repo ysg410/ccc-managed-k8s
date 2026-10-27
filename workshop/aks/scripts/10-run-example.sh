@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # Run ON THE JUMPBOX as azureuser: /opt/aks-ccc/10-run-example.sh
-# Deploys examples/finos-ccc from the PR branch with the generated tfvars,
-# then checks idempotency.
+# Deploys examples/finos-ccc of the published AKS module (version AKS_MODULE_VERSION,
+# from the landing zone's aks_module_version) with the generated tfvars, then checks
+# idempotency. The example's files come from the module's GitHub tag; its module "aks"
+# is pointed at the same version in the Terraform registry.
 #
 # The workshop settings (node pool, AKS tier, add-ons, registry SKU) come from
 # landing-zone/workshop.auto.tfvars.json through the generated tfvars; the
@@ -13,7 +15,7 @@
 # GRANT_ROUTE_TABLE=true (default) applies only when the landing zone has the
 # egress firewall: it creates the identities first and grants the control-plane
 # identity Network Contributor on the node subnet's route table, which the
-# example does not do. Set it to false to test the PR exactly as written.
+# example does not do. Set it to false to test the example exactly as written.
 set -euo pipefail
 # shellcheck source=/dev/null
 source /opt/aks-ccc/env.sh
@@ -26,13 +28,24 @@ az account show >/dev/null 2>&1 || az login --use-device-code --tenant "$TENANT_
 az account set --subscription "$SUBSCRIPTION_ID"
 echo "Deploying as: $(az account show --query user.name -o tsv)"
 
+: "${AKS_MODULE_VERSION:?not set in /opt/aks-ccc/env.sh: apply the landing zone and run scripts/05-sync-jumpbox.sh}"
+MODULE_REPO=Azure/terraform-azurerm-avm-res-containerservice-managedcluster
+echo "==> examples/finos-ccc from $MODULE_REPO v$AKS_MODULE_VERSION, module from the Terraform registry"
+mkdir -p "$EXAMPLE_DIR"
 cd "$EXAMPLE_DIR"
-echo "==> Updating to the latest $EXAMPLE_REPO_BRANCH"
-git checkout -- . # discard edits made by earlier versions of this script
-git pull --ff-only origin "$EXAMPLE_REPO_BRANCH"
-git log --oneline -1
+src="$(mktemp -d)"
+curl -fsSL "https://github.com/$MODULE_REPO/archive/refs/tags/v$AKS_MODULE_VERSION.tar.gz" |
+  tar -xz -C "$src" --strip-components=3 --wildcards '*/examples/finos-ccc/*'
+# Replace the example's files; keep the state, .terraform and the lock file.
+find . -maxdepth 1 -name '*.tf' -delete
+rm -rf exceptions
+cp -r "$src"/. .
+rm -rf "$src"
+# The example calls the module from its repository checkout (source = "../.."); use the
+# published registry module of the same version instead.
+sed -i "s|^  source = \"\.\./\.\.\"\$|  source  = \"Azure/avm-res-containerservice-managedcluster/azurerm\"\n  version = \"$AKS_MODULE_VERSION\"|" main.tf
+grep -q "^  version = \"$AKS_MODULE_VERSION\"" main.tf || { echo "Could not point module \"aks\" in main.tf at the registry"; exit 1; }
 install -m 0600 /opt/aks-ccc/terraform.tfvars.json terraform.tfvars.json
-rm -f lowcost_override.tf pr_fixes_override.tf # replaced by the workshop files
 install -m 0644 /opt/aks-ccc/workshop_variables.tf /opt/aks-ccc/workshop_override.tf /opt/aks-ccc/workshop_external_dns.tf .
 echo "==> Workshop settings"
 jq 'with_entries(select(.key | startswith("workshop_")))' terraform.tfvars.json

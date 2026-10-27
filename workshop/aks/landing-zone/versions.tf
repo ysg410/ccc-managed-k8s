@@ -20,7 +20,7 @@ terraform {
 provider "azurerm" {
   subscription_id = var.subscription_id
 
-  # Registers the core providers plus the extra ones the PR example needs
+  # Registers the core providers plus the extra ones the AKS example needs
   # (the example itself uses resource_provider_registrations = "none").
   resource_provider_registrations = "core"
   resource_providers_to_register = [

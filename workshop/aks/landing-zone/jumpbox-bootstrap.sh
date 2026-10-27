@@ -24,8 +24,8 @@ az aks install-cli --install-location /usr/local/bin/kubectl --kubelogin-install
 # Helm (Kyverno and external-dns charts)
 curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
 
-# PR branch and generated inputs
-sudo -u azureuser git clone --branch "$EXAMPLE_REPO_BRANCH" "$EXAMPLE_REPO_URL" /home/azureuser/aks-avm
+# Working directory for examples/finos-ccc (10-run-example.sh downloads it) and generated inputs
+sudo -u azureuser mkdir -p "$EXAMPLE_DIR"
 install -o azureuser -g azureuser -m 0600 /opt/aks-ccc/terraform.tfvars.json "$EXAMPLE_DIR/terraform.tfvars.json"
 echo 'source /opt/aks-ccc/env.sh' >> /home/azureuser/.bashrc
 

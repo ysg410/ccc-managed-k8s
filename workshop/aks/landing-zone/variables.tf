@@ -145,16 +145,15 @@ variable "kubernetes_version" {
   default     = null
 }
 
-variable "example_repo_url" {
-  description = "Repository containing the PR branch."
+variable "aks_module_version" {
+  description = "Version of the published AKS module (registry Azure/avm-res-containerservice-managedcluster/azurerm). 10-run-example.sh takes examples/finos-ccc from the module's GitHub tag v<version> and points it at this registry version."
   type        = string
-  default     = "https://github.com/ysg410/terraform-azurerm-avm-res-containerservice-managedcluster.git"
-}
+  default     = "0.8.6"
 
-variable "example_repo_branch" {
-  description = "PR branch to test."
-  type        = string
-  default     = "feat/finos-ccc-example"
+  validation {
+    condition     = can(regex("^[0-9]+\\.[0-9]+\\.[0-9]+$", var.aks_module_version))
+    error_message = "aks_module_version must be a release version such as 0.8.6."
+  }
 }
 
 variable "tags" {

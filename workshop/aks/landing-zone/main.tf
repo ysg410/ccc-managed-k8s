@@ -19,7 +19,7 @@ locals {
   acr_pe_cidr  = "10.20.2.0/27"
   service_cidr = "10.100.0.0/16"
   dns_ip       = "10.100.0.10"
-  # 172.18.0.0/16 is the pod CIDR hard-coded in the PR example; nothing here overlaps it.
+  # 172.18.0.0/16 is the pod CIDR hard-coded in the AKS example; nothing here overlaps it.
 }
 
 resource "azurerm_resource_group" "this" {

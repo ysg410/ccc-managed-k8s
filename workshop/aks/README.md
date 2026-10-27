@@ -2,10 +2,13 @@
 
 Builds a CCC-hardened, private AKS cluster for the workshop and deploys the
 [TraderX demo](../../examples/traderx/traderx-aks-demo.yaml) on it. The cluster
-comes from the Azure Verified Module for AKS: its
-[`examples/finos-ccc`](https://github.com/Azure/terraform-azurerm-avm-res-containerservice-managedcluster/pull/333)
-example, currently taken from the PR #333 branch
-(`example_repo_url` / `example_repo_branch` in the landing zone).
+comes from the Azure Verified Module for AKS: its published
+[`examples/finos-ccc`](https://registry.terraform.io/modules/Azure/avm-res-containerservice-managedcluster/azurerm/latest/examples/finos-ccc)
+example ([source](https://github.com/Azure/terraform-azurerm-avm-res-containerservice-managedcluster/tree/main/examples/finos-ccc)).
+`10-run-example.sh` downloads the example from the module's GitHub tag
+`v<aks_module_version>` (landing-zone variable, default `0.8.6`) and points its
+`module "aks"` at the same version in the Terraform registry
+(`Azure/avm-res-containerservice-managedcluster/azurerm`).
 
 The landing zone here builds everything that example expects to already exist
 on a fresh Azure subscription, plus a jumpbox inside the network. Everything
@@ -157,7 +160,9 @@ cloud-init status --wait          # bootstrap takes ~5 min after the VM is up
 /opt/aks-ccc/10-run-example.sh
 ```
 
-The script logs you in with a device code, runs `init`/`validate`, deploys
+The script logs you in with a device code, replaces the example's files in
+`~/aks-avm/examples/finos-ccc` with those of `v<aks_module_version>` (the
+Terraform state there is kept), runs `init`/`validate`, deploys
 in two stages (see below), asks before applying the full plan (about 42
 resources), then runs `terraform plan -detailed-exitcode` and prints IDEMPOTENT
 or DRIFT. AVM telemetry is off (`enable_telemetry = false` in the generated
@@ -217,13 +222,13 @@ the new control-plane identity Network Contributor on the node and API-server
 subnets only. AKS also needs rights on a bring-your-own route table, which is a
 separate resource. By default the script applies
 `module.cluster_identities` first, grants that identity Network Contributor on
-the route table, then applies everything. To test the PR exactly as written:
+the route table, then applies everything. To test the example exactly as written:
 
 ```bash
 GRANT_ROUTE_TABLE=false /opt/aks-ccc/10-run-example.sh
 ```
 
-If that fails with an authorization error on `routeTables`, the PR needs a fix.
+If that fails with an authorization error on `routeTables`, the example needs a fix.
 
 ## 4. Verify (jumpbox)
 
