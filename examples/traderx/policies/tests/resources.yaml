@@ -1,0 +1,224 @@
+# Synthetic fixtures: digests are deliberately not pullable images. Never deploy.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: compliant
+  namespace: traderx
+  labels:
+    app.kubernetes.io/name: traderx
+    workshop.finos.org/owner: team-01
+    workshop.finos.org/environment: workshop
+    workshop.finos.org/data-classification: synthetic
+    workshop.finos.org/policy-profile: ccc-k8s-workshop
+spec:
+  serviceAccountName: traderx-app
+  securityContext:
+    runAsNonRoot: true
+    seccompProfile:
+      type: RuntimeDefault
+  containers:
+    - name: app
+      image: ghcr.io/finos/traderx-c2/account-service@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+      env:
+        - name: DATABASE_DBPASS
+          valueFrom:
+            secretKeyRef:
+              name: database-credentials
+              key: password
+        - name: DATABASE_PG_HOST
+          value: database
+        - name: ACCOUNT_SERVICE_PORT
+          value: '8080'
+      securityContext:
+        allowPrivilegeEscalation: false
+        capabilities:
+          drop: [ALL]
+      resources:
+        requests:
+          cpu: 25m
+          memory: 32Mi
+        limits:
+          cpu: '4'
+          memory: 8Gi
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: noncompliant
+  namespace: traderx
+  labels:
+    app.kubernetes.io/name: traderx
+    workshop.finos.org/owner: unauthorized-team
+    workshop.finos.org/environment: workshop
+    workshop.finos.org/data-classification: synthetic
+    workshop.finos.org/policy-profile: ccc-k8s-workshop
+spec:
+  securityContext:
+    runAsNonRoot: true
+    seccompProfile:
+      type: RuntimeDefault
+  containers:
+    - name: app
+      # Similar prefix is NOT an approved repository.
+      image: ghcr.io/finos/traderx-c2/account-service-evil@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+      securityContext:
+        allowPrivilegeEscalation: false
+        capabilities:
+          drop: [ALL]
+          add: [NET_BIND_SERVICE]
+      resources:
+        requests:
+          cpu: 25m
+          memory: 32Mi
+        limits:
+          cpu: 4001m
+          memory: 8Gi
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: explicit-default-account
+  namespace: traderx
+spec:
+  serviceAccountName: default
+  containers:
+    - name: app
+      image: example.invalid/app:test
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: empty-account
+  namespace: traderx
+spec:
+  serviceAccountName: ''
+  containers:
+    - name: app
+      image: example.invalid/app:test
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: inline-dbpass
+  namespace: traderx
+spec:
+  selector:
+    matchLabels:
+      app: inline-dbpass
+  template:
+    metadata:
+      labels:
+        app: inline-dbpass
+    spec:
+      serviceAccountName: traderx-app
+      containers:
+        - name: app
+          image: example.invalid/app:test
+          env:
+            - name: DATABASE_DBPASS
+              value: synthetic-only
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: inline-init-password
+  namespace: traderx
+spec:
+  template:
+    spec:
+      serviceAccountName: traderx-app
+      restartPolicy: Never
+      initContainers:
+        - name: init
+          image: example.invalid/app:test
+          env:
+            - name: POSTGRES_PASSWORD
+              value: synthetic-only
+      containers:
+        - name: app
+          image: example.invalid/app:test
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: inline-ephemeral-key
+  namespace: traderx
+spec:
+  serviceAccountName: traderx-app
+  containers:
+    - name: app
+      image: example.invalid/app:test
+  ephemeralContainers:
+    - name: debug
+      image: example.invalid/app:test
+      env:
+        - name: apiKey
+          value: synthetic-only
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: configmap-password
+  namespace: traderx
+spec:
+  serviceAccountName: traderx-app
+  containers:
+    - name: app
+      image: example.invalid/app:test
+      env:
+        - name: GF_SECURITY_ADMIN_PASSWORD
+          valueFrom:
+            configMapKeyRef:
+              name: not-a-secret
+              key: password
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: compliant-cronjob
+  namespace: traderx
+spec:
+  schedule: '0 * * * *'
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          serviceAccountName: traderx-batch
+          restartPolicy: Never
+          initContainers:
+            - name: init
+              image: example.invalid/app:test
+              env:
+                - name: POSTGRES_PASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      name: database-credentials
+                      key: password
+          containers:
+            - name: app
+              image: example.invalid/app:test
+              env:
+                - name: GF_SECURITY_ADMIN_PASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      name: grafana-credentials
+                      key: password
+              envFrom:
+                - secretRef:
+                    name: app-credentials
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: implicit-default-cronjob
+  namespace: traderx
+spec:
+  schedule: '0 * * * *'
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          restartPolicy: Never
+          containers:
+            - name: app
+              image: example.invalid/app:test

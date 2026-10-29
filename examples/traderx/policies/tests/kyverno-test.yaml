@@ -1,0 +1,99 @@
+apiVersion: cli.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: traderx-workshop-validation
+policies:
+  - ../validating-policies.yaml
+resources:
+  - resources.yaml
+results:
+  - isValidatingPolicy: true
+    kind: Pod
+    policy: traderx-trusted-images
+    resources: [compliant]
+    result: pass
+  - isValidatingPolicy: true
+    kind: Pod
+    policy: traderx-trusted-images
+    resources: [noncompliant]
+    result: fail
+  - isValidatingPolicy: true
+    kind: Pod
+    policy: traderx-restricted-workloads
+    resources: [compliant]
+    result: pass
+  - isValidatingPolicy: true
+    kind: Pod
+    policy: traderx-restricted-workloads
+    resources: [noncompliant]
+    result: fail
+  - isValidatingPolicy: true
+    kind: Pod
+    policy: traderx-resource-bounds
+    resources: [compliant]
+    result: pass
+  - isValidatingPolicy: true
+    kind: Pod
+    policy: traderx-resource-bounds
+    resources: [noncompliant]
+    result: fail
+  - isValidatingPolicy: true
+    kind: Pod
+    policy: traderx-governance-labels
+    resources: [compliant]
+    result: pass
+  - isValidatingPolicy: true
+    kind: Pod
+    policy: traderx-governance-labels
+    resources: [noncompliant]
+    result: fail
+  - isValidatingPolicy: true
+    kind: Pod
+    policy: traderx-nondefault-service-account
+    resources: [compliant]
+    result: pass
+  - isValidatingPolicy: true
+    kind: Pod
+    policy: traderx-nondefault-service-account
+    resources: [noncompliant, explicit-default-account, empty-account]
+    result: fail
+  - isValidatingPolicy: true
+    kind: Deployment
+    policy: traderx-nondefault-service-account
+    resources: [inline-dbpass]
+    result: pass
+  - isValidatingPolicy: true
+    kind: CronJob
+    policy: traderx-nondefault-service-account
+    resources: [compliant-cronjob]
+    result: pass
+  - isValidatingPolicy: true
+    kind: CronJob
+    policy: traderx-nondefault-service-account
+    resources: [implicit-default-cronjob]
+    result: fail
+  - isValidatingPolicy: true
+    kind: Pod
+    policy: traderx-no-inline-credentials
+    resources: [compliant, noncompliant]
+    result: pass
+  - isValidatingPolicy: true
+    kind: Deployment
+    policy: traderx-no-inline-credentials
+    resources: [inline-dbpass]
+    result: fail
+  - isValidatingPolicy: true
+    kind: Job
+    policy: traderx-no-inline-credentials
+    resources: [inline-init-password]
+    result: fail
+  - isValidatingPolicy: true
+    kind: Pod
+    policy: traderx-no-inline-credentials
+    resources: [inline-ephemeral-key, configmap-password]
+    result: fail
+  - isValidatingPolicy: true
+    kind: CronJob
+    policy: traderx-no-inline-credentials
+    resources: [compliant-cronjob]
+    result: pass

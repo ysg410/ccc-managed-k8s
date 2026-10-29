@@ -1,0 +1,325 @@
+# Workshop policies for Kyverno >= 1.17.0 (policies.kyverno.io/v1).
+# Deny noncompliant requests. These policies never mutate or repair the application.
+apiVersion: policies.kyverno.io/v1
+kind: ValidatingPolicy
+metadata:
+  name: traderx-trusted-images
+  annotations:
+    policies.kyverno.io/title: TraderX approved repositories and immutable images
+    policies.kyverno.io/minversion: 1.17.0
+    workshop.finos.org/ccc-requirements: CCC.K8S.CN04.AR01
+spec:
+  validationActions: [Deny]
+  failurePolicy: Fail
+  evaluation:
+    background:
+      enabled: true
+  matchConstraints:
+    namespaceSelector:
+      matchLabels:
+        kubernetes.io/metadata.name: traderx
+    resourceRules:
+      - apiGroups: ['']
+        apiVersions: [v1]
+        operations: [CREATE, UPDATE]
+        resources: [pods, pods/ephemeralcontainers]
+      - apiGroups: [apps]
+        apiVersions: [v1]
+        operations: [CREATE, UPDATE]
+        resources: [deployments, statefulsets, daemonsets, replicasets]
+      - apiGroups: [batch]
+        apiVersions: [v1]
+        operations: [CREATE, UPDATE]
+        resources: [jobs, cronjobs]
+  variables:
+    - name: podSpec
+      expression: "object.kind == 'Pod' ? object.spec : (object.kind == 'CronJob' ? object.spec.jobTemplate.spec.template.spec : object.spec.template.spec)"
+    - name: containers
+      expression: "variables.podSpec.containers + variables.podSpec.?initContainers.orValue([]) + variables.podSpec.?ephemeralContainers.orValue([])"
+    - name: repositories
+      expression: >-
+        ['ghcr.io/finos/traderx-c2/reference-data',
+         'ghcr.io/finos/traderx-c2/people-service',
+         'ghcr.io/finos/traderx-c2/account-service',
+         'ghcr.io/finos/traderx-c2/position-service',
+         'ghcr.io/finos/traderx-c2/trade-processor',
+         'ghcr.io/finos/traderx-c2/trade-service',
+         'ghcr.io/finos/traderx-c2/price-publisher',
+         'ghcr.io/finos/traderx-c2/order-matcher',
+         'ghcr.io/finos/traderx-c2/web-front-end-angular',
+         'ghcr.io/finos/traderx-c3/api-explorer',
+         'docker.io/library/postgres', 'docker.io/library/nginx',
+         'docker.io/library/nats', 'docker.io/grafana/grafana',
+         'docker.io/grafana/loki', 'docker.io/grafana/tempo',
+         'docker.io/prom/prometheus', 'docker.io/prom/blackbox-exporter',
+         'docker.io/otel/opentelemetry-collector-contrib']
+  validations:
+    - expression: >-
+        variables.containers.all(c, variables.repositories.exists(repo,
+          c.image.startsWith(repo + '@sha256:')) &&
+          c.image.matches('^[^@]+@sha256:[a-f0-9]{64}$'))
+      message: >-
+        CCC.K8S.CN04.AR01: Use an approved full repository name followed by
+        @sha256:<64 lowercase hex characters>. Spell out docker.io/library
+        for official Docker Hub images. Tags, including tag@digest, are not accepted.
+---
+apiVersion: policies.kyverno.io/v1
+kind: ValidatingPolicy
+metadata:
+  name: traderx-restricted-workloads
+  annotations:
+    policies.kyverno.io/title: TraderX restricted Linux workloads
+    policies.kyverno.io/minversion: 1.17.0
+    workshop.finos.org/ccc-requirements: CCC.K8S.CN05.AR01,CCC.K8S.CN05.AR02
+spec:
+  validationActions: [Deny]
+  failurePolicy: Fail
+  evaluation:
+    background:
+      enabled: true
+  matchConstraints:
+    namespaceSelector:
+      matchLabels:
+        kubernetes.io/metadata.name: traderx
+    resourceRules:
+      - apiGroups: ['']
+        apiVersions: [v1]
+        operations: [CREATE, UPDATE]
+        resources: [pods, pods/ephemeralcontainers]
+      - apiGroups: [apps]
+        apiVersions: [v1]
+        operations: [CREATE, UPDATE]
+        resources: [deployments, statefulsets, daemonsets, replicasets]
+      - apiGroups: [batch]
+        apiVersions: [v1]
+        operations: [CREATE, UPDATE]
+        resources: [jobs, cronjobs]
+  variables:
+    - name: podSpec
+      expression: "object.kind == 'Pod' ? object.spec : (object.kind == 'CronJob' ? object.spec.jobTemplate.spec.template.spec : object.spec.template.spec)"
+    - name: containers
+      expression: "variables.podSpec.containers + variables.podSpec.?initContainers.orValue([]) + variables.podSpec.?ephemeralContainers.orValue([])"
+  validations:
+    - expression: >-
+        !variables.podSpec.?hostNetwork.orValue(false) &&
+        !variables.podSpec.?hostPID.orValue(false) &&
+        !variables.podSpec.?hostIPC.orValue(false) &&
+        variables.podSpec.?volumes.orValue([]).all(v, !has(v.hostPath))
+      message: 'CCC.K8S.CN05.AR01: Host networking, host PID/IPC and hostPath volumes are forbidden.'
+    - expression: >-
+        variables.podSpec.?os.?name.orValue('linux') == 'linux' &&
+        variables.containers.all(c,
+          !c.?securityContext.?privileged.orValue(false) &&
+          c.?securityContext.?allowPrivilegeEscalation.orValue(true) == false &&
+          c.?securityContext.?runAsNonRoot.orValue(
+            variables.podSpec.?securityContext.?runAsNonRoot.orValue(false)) &&
+          c.?securityContext.?runAsUser.orValue(
+            variables.podSpec.?securityContext.?runAsUser.orValue(1)) > 0 &&
+          c.?securityContext.?seccompProfile.?type.orValue(
+            variables.podSpec.?securityContext.?seccompProfile.?type.orValue('')) == 'RuntimeDefault' &&
+          c.?securityContext.?capabilities.?drop.orValue([]).exists(cap, cap == 'ALL') &&
+          size(c.?securityContext.?capabilities.?add.orValue([])) == 0)
+      message: >-
+        CCC.K8S.CN05: Linux containers must run as non-root, use RuntimeDefault
+        seccomp, disable privilege escalation, drop ALL capabilities, add none,
+        and not be privileged. Pod-level non-root/seccomp settings may be inherited.
+---
+apiVersion: policies.kyverno.io/v1
+kind: ValidatingPolicy
+metadata:
+  name: traderx-resource-bounds
+  annotations:
+    policies.kyverno.io/title: TraderX CPU and memory bounds
+    policies.kyverno.io/minversion: 1.17.0
+    workshop.finos.org/ccc-requirements: CCC.K8S.CN13.AR01
+spec:
+  validationActions: [Deny]
+  failurePolicy: Fail
+  evaluation:
+    background:
+      enabled: true
+  matchConstraints:
+    namespaceSelector:
+      matchLabels:
+        kubernetes.io/metadata.name: traderx
+    resourceRules:
+      - apiGroups: ['']
+        apiVersions: [v1]
+        operations: [CREATE, UPDATE]
+        resources: [pods]
+      - apiGroups: [apps]
+        apiVersions: [v1]
+        operations: [CREATE, UPDATE]
+        resources: [deployments, statefulsets, daemonsets, replicasets]
+      - apiGroups: [batch]
+        apiVersions: [v1]
+        operations: [CREATE, UPDATE]
+        resources: [jobs, cronjobs]
+  variables:
+    - name: podSpec
+      expression: "object.kind == 'Pod' ? object.spec : (object.kind == 'CronJob' ? object.spec.jobTemplate.spec.template.spec : object.spec.template.spec)"
+    # Kubernetes does not permit resource declarations on ephemeral containers.
+    - name: containers
+      expression: "variables.podSpec.containers + variables.podSpec.?initContainers.orValue([])"
+  validations:
+    - expression: >-
+        variables.containers.all(c,
+          has(c.resources) && has(c.resources.requests) && has(c.resources.limits) &&
+          has(c.resources.requests.cpu) && has(c.resources.requests.memory) &&
+          has(c.resources.limits.cpu) && has(c.resources.limits.memory))
+      message: 'CCC.K8S.CN13.AR01: Every regular/init container must declare CPU and memory requests AND limits.'
+    - expression: >-
+        variables.containers.all(c,
+          quantity(c.resources.requests.cpu).compareTo(quantity('25m')) >= 0 &&
+          quantity(c.resources.requests.cpu).compareTo(quantity(c.resources.limits.cpu)) <= 0 &&
+          quantity(c.resources.limits.cpu).compareTo(quantity('4')) <= 0 &&
+          quantity(c.resources.requests.memory).compareTo(quantity('32Mi')) >= 0 &&
+          quantity(c.resources.requests.memory).compareTo(quantity(c.resources.limits.memory)) <= 0 &&
+          quantity(c.resources.limits.memory).compareTo(quantity('8Gi')) <= 0)
+      message: >-
+        Workshop bounds per container: CPU 25m <= request <= limit <= 4;
+        memory 32Mi <= request <= limit <= 8Gi. These are guardrails, not sizing defaults.
+---
+apiVersion: policies.kyverno.io/v1
+kind: ValidatingPolicy
+metadata:
+  name: traderx-governance-labels
+  annotations:
+    policies.kyverno.io/title: TraderX governance metadata
+    policies.kyverno.io/minversion: 1.17.0
+    workshop.finos.org/ccc-requirements: CCC.K8S.CN15.AR01
+spec:
+  validationActions: [Deny]
+  failurePolicy: Fail
+  evaluation:
+    background:
+      enabled: true
+  matchConstraints:
+    namespaceSelector:
+      matchLabels:
+        kubernetes.io/metadata.name: traderx
+    resourceRules:
+      - apiGroups: ['']
+        apiVersions: [v1]
+        operations: [CREATE, UPDATE]
+        resources: [pods, namespaces]
+      - apiGroups: [apps]
+        apiVersions: [v1]
+        operations: [CREATE, UPDATE]
+        resources: [deployments, statefulsets, daemonsets, replicasets]
+      - apiGroups: [batch]
+        apiVersions: [v1]
+        operations: [CREATE, UPDATE]
+        resources: [jobs, cronjobs]
+  variables:
+    - name: metadataSets
+      expression: >-
+        object.kind in ['Pod', 'Namespace'] ? [object.metadata] :
+        (object.kind == 'CronJob' ?
+          [object.metadata, object.spec.jobTemplate.metadata, object.spec.jobTemplate.spec.template.metadata] :
+          [object.metadata, object.spec.template.metadata])
+  validations:
+    - expression: >-
+        variables.metadataSets.all(m, has(m.labels) &&
+          'app.kubernetes.io/name' in m.labels && m.labels['app.kubernetes.io/name'] != '' &&
+          'workshop.finos.org/owner' in m.labels && m.labels['workshop.finos.org/owner'] in
+            ['facilitators', 'team-01', 'team-02', 'team-03', 'team-04', 'team-05'] &&
+          'workshop.finos.org/environment' in m.labels && m.labels['workshop.finos.org/environment'] == 'workshop' &&
+          'workshop.finos.org/data-classification' in m.labels && m.labels['workshop.finos.org/data-classification'] == 'synthetic' &&
+          'workshop.finos.org/policy-profile' in m.labels && m.labels['workshop.finos.org/policy-profile'] == 'ccc-k8s-workshop')
+      message: >-
+        CCC.K8S.CN15.AR01: Resource and workload-template metadata need nonempty
+        app.kubernetes.io/name; workshop.finos.org/owner=facilitators or team-01..team-05;
+        environment=workshop; data-classification=synthetic; policy-profile=ccc-k8s-workshop
+        (all four latter keys use the workshop.finos.org/ prefix).
+---
+apiVersion: policies.kyverno.io/v1
+kind: ValidatingPolicy
+metadata:
+  name: traderx-nondefault-service-account
+  annotations:
+    policies.kyverno.io/title: TraderX dedicated service accounts
+    policies.kyverno.io/minversion: 1.17.0
+    # Supporting least-privilege guardrail; no specific AR bans the default account.
+    workshop.finos.org/ccc-requirements: CCC.K8S.CN02
+spec:
+  validationActions: [Deny]
+  failurePolicy: Fail
+  evaluation:
+    background:
+      enabled: true
+  matchConstraints:
+    namespaceSelector:
+      matchLabels:
+        kubernetes.io/metadata.name: traderx
+    resourceRules:
+      - apiGroups: ['']
+        apiVersions: [v1]
+        operations: [CREATE, UPDATE]
+        resources: [pods]
+      - apiGroups: [apps]
+        apiVersions: [v1]
+        operations: [CREATE, UPDATE]
+        resources: [deployments, statefulsets, daemonsets, replicasets]
+      - apiGroups: [batch]
+        apiVersions: [v1]
+        operations: [CREATE, UPDATE]
+        resources: [jobs, cronjobs]
+  variables:
+    - name: podSpec
+      expression: "object.kind == 'Pod' ? object.spec : (object.kind == 'CronJob' ? object.spec.jobTemplate.spec.template.spec : object.spec.template.spec)"
+  validations:
+    - expression: >-
+        has(variables.podSpec.serviceAccountName) &&
+        variables.podSpec.serviceAccountName != '' &&
+        variables.podSpec.serviceAccountName != 'default'
+      message: >-
+        CCC.K8S.CN02: Set serviceAccountName to a dedicated non-default ServiceAccount.
+        Omitting it or leaving it empty uses the default account and is forbidden.
+---
+apiVersion: policies.kyverno.io/v1
+kind: ValidatingPolicy
+metadata:
+  name: traderx-no-inline-credentials
+  annotations:
+    policies.kyverno.io/title: TraderX credential environment variables use Secrets
+    policies.kyverno.io/minversion: 1.17.0
+    workshop.finos.org/ccc-requirements: CCC.K8S.CN07.AR04
+spec:
+  validationActions: [Deny]
+  failurePolicy: Fail
+  evaluation:
+    background:
+      enabled: true
+  matchConstraints:
+    namespaceSelector:
+      matchLabels:
+        kubernetes.io/metadata.name: traderx
+    resourceRules:
+      - apiGroups: ['']
+        apiVersions: [v1]
+        operations: [CREATE, UPDATE]
+        resources: [pods, pods/ephemeralcontainers]
+      - apiGroups: [apps]
+        apiVersions: [v1]
+        operations: [CREATE, UPDATE]
+        resources: [deployments, statefulsets, daemonsets, replicasets]
+      - apiGroups: [batch]
+        apiVersions: [v1]
+        operations: [CREATE, UPDATE]
+        resources: [jobs, cronjobs]
+  variables:
+    - name: podSpec
+      expression: "object.kind == 'Pod' ? object.spec : (object.kind == 'CronJob' ? object.spec.jobTemplate.spec.template.spec : object.spec.template.spec)"
+    - name: containers
+      expression: "variables.podSpec.containers + variables.podSpec.?initContainers.orValue([]) + variables.podSpec.?ephemeralContainers.orValue([])"
+  validations:
+    # Match credential-name segments case-insensitively, including DATABASE_DBPASS.
+    - expression: >-
+        variables.containers.all(c, c.?env.orValue([]).all(e,
+          !e.name.matches('(?i)(^|_)(password|passwd|pass|dbpass|secret|token|api_?key|access_?key|private_?key|client_?secret)($|_)') ||
+          (has(e.valueFrom) && has(e.valueFrom.secretKeyRef))))
+      message: >-
+        CCC.K8S.CN07.AR04: Credential environment variables (password/passwd/pass/dbpass, secret,
+        token, API/access/private keys and client secrets) must use
+        valueFrom.secretKeyRef, not literal values or ConfigMap references.
