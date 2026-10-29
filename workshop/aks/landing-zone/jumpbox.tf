@@ -86,16 +86,18 @@ locals {
     "/opt/aks-ccc/traderx.yaml"                  = { content = file(pathexpand(coalesce(var.traderx_manifest_path, "${path.module}/../../../examples/traderx/traderx-aks-demo.yaml"))), mode = "0644" }
   }
 
-  # Gzipped so the manifest fits in Azure's 64 KB custom data limit.
+  # Azure limits custom data to 87,380 base64 characters (64 KB). The whole
+  # cloud-config is gzipped once (cloud-init decompresses gzip user data), which
+  # compresses far better than gzipping and base64-encoding each file.
   cloud_init = "#cloud-config\n${yamlencode({
     write_files = [for path, f in local.jumpbox_files : {
       path        = path
       permissions = f.mode
-      encoding    = "gz+b64"
-      content     = base64gzip(f.content)
+      content     = f.content
     }]
     runcmd = [["bash", "-c", "/opt/aks-ccc/bootstrap.sh > /var/log/aks-ccc-bootstrap.log 2>&1"]]
   })}"
+  custom_data = base64gzip(local.cloud_init)
 }
 
 resource "azurerm_linux_virtual_machine" "jumpbox" {
@@ -106,7 +108,7 @@ resource "azurerm_linux_virtual_machine" "jumpbox" {
   admin_username                  = "azureuser"
   disable_password_authentication = true
   network_interface_ids           = [azurerm_network_interface.jumpbox.id]
-  custom_data                     = base64encode(local.cloud_init)
+  custom_data                     = local.custom_data
   tags                            = var.tags
 
   admin_ssh_key {
@@ -131,6 +133,11 @@ resource "azurerm_linux_virtual_machine" "jumpbox" {
   # scripts/05-sync-jumpbox.sh instead.
   lifecycle {
     ignore_changes = [custom_data]
+
+    precondition {
+      condition     = length(local.custom_data) <= 87380
+      error_message = "The jumpbox files are too large for Azure custom data (${length(local.custom_data)} of 87380 base64 characters). Shrink the TraderX manifest (traderx_manifest_path) or the scripts."
+    }
   }
 }
 

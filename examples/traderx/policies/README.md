@@ -37,6 +37,7 @@ kubectl get namespace traderx --show-labels
 kubectl get crd validatingpolicies.policies.kyverno.io
 kubectl explain validatingpolicy --api-version=policies.kyverno.io/v1
 
+kubectl apply -f examples/traderx/policies/kyverno-reports-rbac.yaml
 kubectl apply --dry-run=server -f examples/traderx/policies/validating-policies.yaml
 kubectl apply -f examples/traderx/policies/validating-policies.yaml
 
@@ -44,6 +45,11 @@ kubectl get validatingpolicies.policies.kyverno.io
 kubectl get validatingpolicies.policies.kyverno.io traderx-trusted-images -o yaml
 kubectl get policyreports.wgpolicyk8s.io -n traderx
 ```
+
+`kyverno-reports-rbac.yaml` lets Kyverno's reports controller read
+`pods/ephemeralcontainers`, which three of the policies match. Without it those
+three stay `READY false` with "Policy is not ready for reporting, missing
+permissions"; they still enforce at admission, but produce no background reports.
 
 Check policy readiness/status and reports for evaluation errors. Background
 reports are asynchronous. Noncompliant create/update requests are denied once

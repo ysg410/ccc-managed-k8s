@@ -1,0 +1,18 @@
+# Kyverno reports on a resource only when its reports controller can get, list and
+# watch it; otherwise the policy stays not ready (condition RBACPermissionsGranted:
+# "Policy is not ready for reporting, missing permissions"). The controller's
+# default role covers pods but not the pods/ephemeralcontainers subresource, which
+# traderx-trusted-images, traderx-restricted-workloads and
+# traderx-no-inline-credentials match. Kyverno aggregates this ClusterRole into
+# kyverno:reports-controller through the label. Admission enforcement does not
+# depend on it.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: kyverno:reports-controller:traderx-ephemeralcontainers
+  labels:
+    rbac.kyverno.io/aggregate-to-reports-controller: "true"
+rules:
+  - apiGroups: [""]
+    resources: ["pods/ephemeralcontainers"]
+    verbs: ["get", "list", "watch"]
