@@ -9,8 +9,13 @@
 # landing-zone/workshop.auto.tfvars.json through the generated tfvars; the
 # example reads them via workshop_variables.tf and workshop_override.tf, which
 # this script copies into the clone. workshop_external_dns.tf adds the external-dns
-# workload identity; 15-install-cluster-addons.sh (run at the end) installs
-# Kyverno and external-dns.
+# workload identity.
+#
+# After the apply it links the API server's private DNS zone to the hub VNet,
+# runs 15-install-cluster-addons.sh (Kyverno, external-dns, kubectl credentials),
+# labels namespaces for Pod Security, verifies the cluster (settings, nodes, KMS
+# secret round trip, no public node IPs), installs the TraderX Kyverno policies
+# and their reports RBAC, and exits only when every ValidatingPolicy is ready.
 #
 # GRANT_ROUTE_TABLE=true (default) applies only when the landing zone has the
 # egress firewall: it creates the identities first and grants the control-plane
@@ -120,7 +125,9 @@ for _ in $(seq 1 30); do
   sleep 10
 done
 echo "$PRIVATE_FQDN -> ${ip:-unresolved}"
+[[ -n "${ip:-}" ]] || { echo "The jumpbox cannot resolve the API server yet; rerun /opt/aks-ccc/10-run-example.sh"; exit 1; }
 
+# Fetches Entra credentials for kubectl (you must be in the admin group).
 /opt/aks-ccc/15-install-cluster-addons.sh
 
 # Pod Security Admission: enforce the baseline profile in every namespace except
@@ -139,4 +146,57 @@ kubectl label --overwrite namespace "${PSA_NAMESPACES[@]}" \
 kubectl label --overwrite namespace kube-system pod-security.kubernetes.io/enforce=privileged
 kubectl get namespaces -L pod-security.kubernetes.io/enforce,pod-security.kubernetes.io/enforce-version
 
-echo "Next: /opt/aks-ccc/20-verify-cluster.sh"
+CLUSTER_NAME="$(terraform output -raw cluster_name)"
+echo "==> Cluster settings"
+az aks show -g "$RESOURCE_GROUP" -n "$CLUSTER_NAME" --query '{
+  provisioningState: provisioningState,
+  kubernetesVersion: currentKubernetesVersion,
+  privateCluster: apiServerAccessProfile.enablePrivateCluster,
+  publicFqdn: apiServerAccessProfile.enablePrivateClusterPublicFqdn,
+  vnetIntegration: apiServerAccessProfile.enableVnetIntegration,
+  outboundType: networkProfile.outboundType,
+  networkPlugin: networkProfile.networkPluginMode,
+  dataplane: networkProfile.networkDataplane,
+  networkPolicy: networkProfile.networkPolicy,
+  podCidr: networkProfile.podCidr,
+  kmsEnabled: securityProfile.azureKeyVaultKms.enabled,
+  kmsNetworkAccess: securityProfile.azureKeyVaultKms.keyVaultNetworkAccess,
+  diskEncryptionSet: diskEncryptionSetId,
+  entraManaged: aadProfile.managed,
+  oidcIssuer: oidcIssuerProfile.enabled,
+  workloadIdentity: securityProfile.workloadIdentity.enabled,
+  localAccountsDisabled: disableLocalAccounts
+}' -o yaml
+kubectl get nodes -o wide
+kubectl get pods -n kube-system
+
+echo "==> KMS smoke test: create and read a secret"
+kubectl create secret generic kms-smoke-test --from-literal=hello=world --dry-run=client -o yaml | kubectl apply -f -
+kubectl get secret kms-smoke-test -o jsonpath='{.data.hello}' | base64 -d; echo
+kubectl delete secret kms-smoke-test
+
+echo "==> Nodes have no public IPs"
+az vmss list -g "$(az aks show -g "$RESOURCE_GROUP" -n "$CLUSTER_NAME" --query nodeResourceGroup -o tsv)" \
+  --query "[].{name:name, publicIp:virtualMachineProfile.networkProfile.networkInterfaceConfigurations[0].ipConfigurations[0].publicIpAddressConfiguration}" -o table
+
+# TraderX Kyverno policies (examples/traderx/policies). The RBAC lets Kyverno's
+# reports controller read pods/ephemeralcontainers, without which three policies
+# never become ready.
+echo "==> Kyverno policies for TraderX"
+kubectl apply -f /opt/aks-ccc/kyverno-reports-rbac.yaml
+kubectl apply -f /opt/aks-ccc/traderx-policies.yaml
+not_ready=""
+for _ in $(seq 1 30); do
+  not_ready="$(kubectl get vpol -o json | jq -r '.items[] | select(.status.conditionStatus.ready != true)
+    | "\(.metadata.name): \([.status.conditionStatus.conditions[]? | select(.status != "True") | .message] | join("; "))"')"
+  [[ -z "$not_ready" ]] && break
+  sleep 10
+done
+kubectl get vpol -A
+if [[ -n "$not_ready" ]]; then
+  printf 'Not ready after 5 minutes:\n%s\n' "$not_ready"
+  echo "Fix the policies above and rerun /opt/aks-ccc/10-run-example.sh"
+  exit 1
+fi
+
+echo "Next: /opt/aks-ccc/30-deploy-traderx.sh"

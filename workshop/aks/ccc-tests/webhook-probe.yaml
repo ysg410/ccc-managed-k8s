@@ -6,11 +6,18 @@
 # The webhook only sees Pods labelled ccc.finos.org/webhook-probe-object=true in
 # namespaces labelled ccc.finos.org/webhook-probe=true, so failurePolicy: Fail
 # cannot affect anything else in the cluster.
+# Both namespaces enforce Pod Security "restricted": CCC.K8S.CN11.AR01 needs an
+# explicit policy on every namespace, and they are created after
+# 10-run-example.sh labels the existing ones. The probe Deployment and the
+# compliant probe Pod (webhook-compliant-probe-manifest) meet restricted.
 apiVersion: v1
 kind: Namespace
 metadata:
   name: ccc-admission-webhook-probe
   labels:
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/warn: restricted
     environment: test
     owner: ccc-workshop
 ---
@@ -20,6 +27,9 @@ metadata:
   name: ccc-admission-webhook-test
   labels:
     ccc.finos.org/webhook-probe: "true"
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/warn: restricted
     environment: test
     owner: ccc-workshop
 ---

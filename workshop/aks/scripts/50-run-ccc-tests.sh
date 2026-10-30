@@ -43,7 +43,7 @@ PRIVATE_FQDN="$(tf_out "${CCC_FQDN_OUTPUT:-private_fqdn}")"
 OIDC_ISSUER_URL="$(tf_out oidc_issuer_url)"
 LOG_ANALYTICS_WORKSPACE_GUID="$(az monitor log-analytics workspace show --ids "$(tf_out log_analytics_workspace_id)" --query customerId -o tsv)"
 
-getent hosts "$PRIVATE_FQDN" >/dev/null || { echo "$PRIVATE_FQDN does not resolve. Run ${CCC_VERIFY_HINT:-/opt/aks-ccc/20-verify-cluster.sh} first."; exit 1; }
+getent hosts "$PRIVATE_FQDN" >/dev/null || { echo "$PRIVATE_FQDN does not resolve. Run ${CCC_VERIFY_HINT:-/opt/aks-ccc/10-run-example.sh} first."; exit 1; }
 # 40-setup-ccc-tests.sh fetched this cluster's credentials; make sure kubectl and the plugin use them.
 kubectl config use-context "$CLUSTER_NAME" >/dev/null || { echo "No kubeconfig context $CLUSTER_NAME. Run $SETUP_HINT first."; exit 1; }
 kubectl get namespace ccc-test >/dev/null 2>&1 || { echo "Fixtures missing. Run $SETUP_HINT first."; exit 1; }

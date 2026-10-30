@@ -1,7 +1,7 @@
 # Privateer config for the CCC.K8S behavioural tests against the workshop AKS
 # cluster. Derived from upstream common-cloud-controls
-# cfi-testing/privateer-config/avm/azure-avm-kubernetes.yml (branch
-# managed-k8s-behavioural), customised for this environment.
+# cfi-testing/privateer-config/avm/azure-avm-kubernetes.yml (main, where
+# managed-k8s-behavioural was merged in #1288), customised for this environment.
 #
 # 50-run-ccc-tests.sh renders it with envsubst, filling only the cluster
 # coordinates (${CLUSTER_NAME}, ${LOCATION}, ...). ${AZURE_TEST_USER_*} and
@@ -11,7 +11,7 @@
 # Differences from the upstream AVM config:
 #   - azure-aks-kube-transport: direct. The example disables AKS Run Command,
 #     so command-invoke cannot work; direct needs the private API, so the run
-#     happens on the jumpbox after 20-verify-cluster.sh linked the DNS zone.
+#     happens on the jumpbox after 10-run-example.sh linked the DNS zone.
 #   - Every image in the manifests below is digest-pinned and the "compliant"
 #     Pods satisfy Pod Security "restricted", because the ccc-test namespace
 #     enforces both (k8s-fixtures.yaml). Each negative manifest violates only

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Run ON THE JUMPBOX after 20-verify-cluster.sh: /opt/aks-ccc/30-deploy-traderx.sh
+# Run ON THE JUMPBOX after 10-run-example.sh: /opt/aks-ccc/30-deploy-traderx.sh
 # Deploys TRADERX_INSTANCES independent copies of /opt/aks-ccc/traderx.yaml
 # (examples/traderx/traderx-aks-demo.yaml from this repository, delivered by the
 # landing zone) into namespaces traderx-1 .. traderx-N, and exposes each one's
@@ -41,6 +41,11 @@ for ns in "${NAMESPACES[@]}"; do
   if grep -qE '^  (name|namespace): traderx$' <<<"$rendered"; then
     echo "The manifest still references namespace traderx after rendering"; exit 1
   fi
+  # Pod Security baseline, as 10-run-example.sh sets on every namespace it finds
+  # (CCC.K8S.CN11.AR01 needs an explicit policy on every namespace).
+  kubectl create namespace "$ns" --dry-run=client -o yaml | kubectl apply -f - >/dev/null
+  kubectl label --overwrite namespace "$ns" \
+    pod-security.kubernetes.io/enforce=baseline pod-security.kubernetes.io/enforce-version=latest >/dev/null
   kubectl apply -f - >/dev/null <<<"$rendered"
   kubectl apply -f - >/dev/null <<EOF
 apiVersion: v1

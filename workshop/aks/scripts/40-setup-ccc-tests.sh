@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Run ON THE JUMPBOX after 20-verify-cluster.sh: /opt/aks-ccc/40-setup-ccc-tests.sh
+# Run ON THE JUMPBOX after 10-run-example.sh: /opt/aks-ccc/40-setup-ccc-tests.sh
 # Prepares the CCC behavioural tests (FINOS common-cloud-controls, Privateer +
 # ccc-behavioural-plugin) against the workshop cluster. Safe to rerun.
 #
@@ -31,7 +31,7 @@ source /opt/aks-ccc/env.sh
 # shellcheck source=/dev/null
 [[ "${CCC_TARGET:-aks}" == aks ]] || source "/opt/aks-ccc/$CCC_TARGET/target.sh"
 CCC_REPO_URL="${CCC_REPO_URL:-https://github.com/finos/common-cloud-controls.git}"
-CCC_REPO_BRANCH="${CCC_REPO_BRANCH:-managed-k8s-behavioural}"
+CCC_REPO_BRANCH="${CCC_REPO_BRANCH:-main}"
 CCC_DIR="${CCC_DIR:-$HOME/common-cloud-controls}"
 WORK_DIR="${CCC_WORK_DIR:-$HOME/ccc-tests}"
 ENV_FILE="$WORK_DIR/ccc-test-env.sh"
@@ -102,7 +102,7 @@ ACR_LOGIN_SERVER="$(tf_out container_registry_login_server)"
 SUFFIX="$(tr -cd 'a-z0-9' <<<"${CLUSTER_NAME##*-}")"
 az aks get-credentials -g "$RESOURCE_GROUP" -n "$CLUSTER_NAME" --overwrite-existing >/dev/null
 kubelogin convert-kubeconfig -l azurecli
-kubectl get --raw /readyz >/dev/null || { echo "kubectl cannot reach $CLUSTER_NAME. Run ${CCC_VERIFY_HINT:-/opt/aks-ccc/20-verify-cluster.sh} first."; exit 1; }
+kubectl get --raw /readyz >/dev/null || { echo "kubectl cannot reach $CLUSTER_NAME. Run ${CCC_VERIFY_HINT:-/opt/aks-ccc/10-run-example.sh} first."; exit 1; }
 echo "Cluster: $CLUSTER_NAME, registry: $ACR_LOGIN_SERVER"
 
 # Saved after each fixture so a failed run keeps the service principal secret.

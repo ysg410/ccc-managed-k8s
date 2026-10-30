@@ -24,12 +24,11 @@ Run every laptop command from this directory (`workshop/aks`). Scripts in
 | 1. Preflight | laptop | `./scripts/00-preflight.sh` |
 | 2. Landing zone | laptop | `cd landing-zone && terraform init && terraform apply` |
 | 3. Sync files (only when the jumpbox already existed) | laptop | `./scripts/05-sync-jumpbox.sh` |
-| 4. Build the cluster, install Kyverno and external-dns | jumpbox | `/opt/aks-ccc/10-run-example.sh` (reinstall add-ons only: `/opt/aks-ccc/15-install-cluster-addons.sh`) |
-| 5. Verify and get kubectl access | jumpbox | `/opt/aks-ccc/20-verify-cluster.sh` |
-| 6. Deploy 4 TraderX instances (`traderx-1..4`), each on a load balancer with a private DNS name | jumpbox | `/opt/aks-ccc/30-deploy-traderx.sh` |
-| 7. Set up CCC behavioural tests | jumpbox | `/opt/aks-ccc/40-setup-ccc-tests.sh` |
-| 8. Run them, get the dashboard | laptop | `./scripts/55-run-ccc-tests-from-laptop.sh` (or `/opt/aks-ccc/50-run-ccc-tests.sh` on the jumpbox) |
-| 9. Tear down | jumpbox, then laptop | `/opt/aks-ccc/95-destroy-ccc-tests.sh`, `/opt/aks-ccc/90-destroy-example.sh`, then `terraform destroy` |
+| 4. Build and verify the cluster, get kubectl access, install Kyverno, external-dns and the TraderX Kyverno policies | jumpbox | `/opt/aks-ccc/10-run-example.sh` (reinstall add-ons only: `/opt/aks-ccc/15-install-cluster-addons.sh`) |
+| 5. Deploy 4 TraderX instances (`traderx-1..4`), each on a load balancer with a private DNS name | jumpbox | `/opt/aks-ccc/30-deploy-traderx.sh` |
+| 6. Set up CCC behavioural tests | jumpbox | `/opt/aks-ccc/40-setup-ccc-tests.sh` |
+| 7. Run them, get the dashboard | laptop | `./scripts/55-run-ccc-tests-from-laptop.sh` (or `/opt/aks-ccc/50-run-ccc-tests.sh` on the jumpbox) |
+| 8. Tear down | jumpbox, then laptop | `/opt/aks-ccc/95-destroy-ccc-tests.sh`, `/opt/aks-ccc/90-destroy-example.sh`, then `terraform destroy` |
 
 ```
 vnet-hub 10.10.0.0/16                          vnet-spoke 10.20.0.0/16
@@ -210,8 +209,10 @@ because AKS runs privileged system pods there (Cilium, kube-proxy, CSI drivers)
 that baseline would keep from starting on new nodes; the explicit label records
 that decision (CCC.K8S.CN11.AR01 needs a label on every namespace).
 Namespaces that already enforce `restricted` keep it. kubectl prints a warning
-for any running pod that baseline would reject. Namespaces created later (TraderX,
-the CCC fixtures) are not labeled by this step.
+for any running pod that baseline would reject. Namespaces created later label
+themselves: `30-deploy-traderx.sh` sets baseline on `traderx-N`, and the CCC
+fixtures (`k8s-fixtures.yaml`, `webhook-probe.yaml`) set restricted or baseline.
+Any other namespace you create needs the label too, or CCC.K8S.CN11.AR01 fails.
 
 **Security alerts.** The example creates an action group that emails the
 subscription's Owners. Expect alert emails when the cluster, role assignments or
@@ -230,15 +231,21 @@ GRANT_ROUTE_TABLE=false /opt/aks-ccc/10-run-example.sh
 
 If that fails with an authorization error on `routeTables`, the example needs a fix.
 
-## 4. Verify (jumpbox)
+**Verification.** The script stops if the jumpbox can't resolve the private API
+server. After the add-ons and labels, it prints the security settings from
+`az aks show`, lists nodes and `kube-system` pods, creates and reads a test
+secret (KMS) and confirms nodes have no public IPs. kubectl uses Entra through
+kubelogin, set up by `15-install-cluster-addons.sh`; you must be in the admin group.
 
-```bash
-/opt/aks-ccc/20-verify-cluster.sh
-```
-
-Checks the jumpbox resolves the private API server, prints the security
-settings from `az aks show`, logs in with Entra via kubelogin, lists nodes and
-pods, creates and reads a test secret (KMS) and confirms nodes have no public IPs.
+**Kyverno policies.** Last, the script applies
+[`kyverno-reports-rbac.yaml`](../../examples/traderx/policies/kyverno-reports-rbac.yaml)
+(lets Kyverno's reports controller read `pods/ephemeralcontainers`, without
+which some policies never become ready) and the TraderX
+[`validating-policies.yaml`](../../examples/traderx/policies/validating-policies.yaml).
+It waits up to 5 minutes for every ValidatingPolicy to report ready, prints
+`kubectl get vpol -A` and fails with each policy's status message if any isn't
+ready. The landing zone delivers both files; after editing them, run
+`terraform apply` and `./scripts/05-sync-jumpbox.sh` again.
 
 ### Deploy TraderX (jumpbox)
 
@@ -308,7 +315,9 @@ It reuses this landing zone, jumpbox and these scripts (`CCC_TARGET=vanilla`).
 These tests check the cluster against the FINOS Common Cloud Controls
 (CCC.K8S, plus the CCC.Core requirements that apply to Kubernetes). They use
 [common-cloud-controls](https://github.com/finos/common-cloud-controls), branch
-`managed-k8s-behavioural`: Privateer (`pvtr`) runs `ccc-behavioural-plugin`,
+`main` (the Kubernetes tests were merged there from `managed-k8s-behavioural` in
+[#1288](https://github.com/finos/common-cloud-controls/pull/1288); override with
+`CCC_REPO_BRANCH`): Privateer (`pvtr`) runs `ccc-behavioural-plugin`,
 which runs the Gherkin scenarios in `modules/features/kubernetes`.
 
 ```
@@ -325,7 +334,7 @@ example disables AKS Run Command, which the plugin's other access mode
 
 ### Set up (jumpbox, once, ~15–20 min)
 
-After `20-verify-cluster.sh` (it links the API DNS zone to the hub VNet):
+After `10-run-example.sh` (it links the API DNS zone to the hub VNet):
 
 ```bash
 /opt/aks-ccc/40-setup-ccc-tests.sh

@@ -1,7 +1,8 @@
 # In-cluster fixtures for the CCC.K8S behavioural tests, ported from upstream
 # common-cloud-controls modules/cloud-api-test/terraform/azure/modules/kubernetes/fixtures
-# (branch managed-k8s-behavioural). 40-setup-ccc-tests.sh applies this file and
-# annotates ccc-wi-sa with the test workload identity's client ID.
+# (main, where managed-k8s-behavioural was merged in #1288). 40-setup-ccc-tests.sh
+# applies this file and annotates ccc-wi-sa with the test workload identity's
+# client ID.
 #
 # Two kinds of objects:
 #   - test targets the scenarios read or act on (namespaces, service accounts,
