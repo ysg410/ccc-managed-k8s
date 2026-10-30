@@ -26,6 +26,7 @@ Run every laptop command from this directory (`workshop/aks`). Scripts in
 | 3. Sync files (only when the jumpbox already existed) | laptop | `./scripts/05-sync-jumpbox.sh` |
 | 4. Build and verify the cluster, get kubectl access, install Kyverno, external-dns and the TraderX Kyverno policies | jumpbox | `/opt/aks-ccc/10-run-example.sh` (reinstall add-ons only: `/opt/aks-ccc/15-install-cluster-addons.sh`) |
 | 5. Deploy 4 TraderX instances (`traderx-1..4`), each on a load balancer with a private DNS name | jumpbox | `/opt/aks-ccc/30-deploy-traderx.sh` |
+| 5 (alternative). TraderX hardening game: one starter TraderX per team, live scoreboard ([game/README.md](game/README.md)) | jumpbox, then laptop | `/opt/aks-ccc/game-10-setup.sh`, then `./game/25-scoreboard-from-laptop.sh` |
 | 6. Set up CCC behavioural tests | jumpbox | `/opt/aks-ccc/40-setup-ccc-tests.sh` |
 | 7. Run them, get the dashboard | laptop | `./scripts/55-run-ccc-tests-from-laptop.sh` (or `/opt/aks-ccc/50-run-ccc-tests.sh` on the jumpbox) |
 | 8. Tear down | jumpbox, then laptop | `/opt/aks-ccc/95-destroy-ccc-tests.sh`, `/opt/aks-ccc/90-destroy-example.sh`, then `terraform destroy` |
@@ -429,6 +430,7 @@ the example's next `terraform plan` removes it (expected drift).
 ## 6. Tear down (stop the costs)
 
 ```bash
+/opt/aks-ccc/game-90-teardown.sh          # on the jumpbox, if you ran the game
 /opt/aks-ccc/95-destroy-ccc-tests.sh      # on the jumpbox, if you set up the CCC tests
 /opt/aks-ccc/90-destroy-example.sh        # on the jumpbox
 cd landing-zone && terraform destroy      # on the laptop

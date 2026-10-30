@@ -199,4 +199,4 @@ if [[ -n "$not_ready" ]]; then
   exit 1
 fi
 
-echo "Next: /opt/aks-ccc/30-deploy-traderx.sh"
+echo "Next: /opt/aks-ccc/30-deploy-traderx.sh, or the TraderX hardening game: /opt/aks-ccc/game-10-setup.sh"

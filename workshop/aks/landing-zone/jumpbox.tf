@@ -85,6 +85,13 @@ locals {
     "/opt/aks-ccc/traderx.yaml"                  = { content = file(pathexpand(coalesce(var.traderx_manifest_path, "${path.module}/../../../examples/traderx/traderx-aks-demo.yaml"))), mode = "0644" }
     "/opt/aks-ccc/traderx-policies.yaml"         = { content = file("${path.module}/../../../examples/traderx/policies/validating-policies.yaml"), mode = "0644" }
     "/opt/aks-ccc/kyverno-reports-rbac.yaml"     = { content = file("${path.module}/../../../examples/traderx/policies/kyverno-reports-rbac.yaml"), mode = "0644" }
+    # TraderX hardening challenge (workshop/aks/game)
+    "/opt/aks-ccc/game-10-setup.sh"      = { content = file("${path.module}/../game/10-setup-game.sh"), mode = "0755" }
+    "/opt/aks-ccc/game-20-scoreboard.sh" = { content = file("${path.module}/../game/20-scoreboard.sh"), mode = "0755" }
+    "/opt/aks-ccc/game-90-teardown.sh"   = { content = file("${path.module}/../game/90-teardown-game.sh"), mode = "0755" }
+    "/opt/aks-ccc/game-scoreboard.py"    = { content = file("${path.module}/../game/scoreboard.py"), mode = "0755" }
+    "/opt/aks-ccc/game-status.sh"        = { content = file("${path.module}/../game/game-status.sh"), mode = "0755" }
+    "/opt/aks-ccc/game-mission.md"       = { content = file("${path.module}/../game/MISSION.md"), mode = "0644" }
   }
 
   # Azure limits custom data to 87,380 base64 characters (64 KB). The whole
